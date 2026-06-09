@@ -5,10 +5,13 @@
     const styleId = 'letterboxd-social-widget-styles';
     const renderDelay = 250;
     const retryDelays = [650, 1400, 2600];
-    const topUpTimeout = 15000;
-    let lastRenderKey = '';
+    const topUpTimeout = 90000;
+
+    // activeKey: itemId of movie currently being rendered (null = idle)
+    // activeId:  incremented each new render; stale completions bail when theirs no longer matches
+    let activeKey = null;
+    let activeId = 0;
     let renderTimer = 0;
-    let renderSequence = 0;
 
     function getActiveDetailPage() {
         const pages = Array.from(document.querySelectorAll('.itemDetailPage, .itemdetailpage'));
@@ -142,6 +145,30 @@
             }));
         }
 
+        const headers = {};
+        const token = window.ApiClient && typeof window.ApiClient.accessToken === 'function'
+            ? window.ApiClient.accessToken()
+            : null;
+
+        if (token) {
+            headers['X-Emby-Token'] = token;
+        }
+
+        const response = await fetch(url, {
+            credentials: 'same-origin',
+            headers
+        });
+
+        if (!response.ok) {
+            return [];
+        }
+
+        return normalizeReviews(await response.json());
+    }
+
+    // Always uses native fetch so ApiClient's internal timeout cannot cut the on-demand search short.
+    async function fetchOnDemand(movieId) {
+        const url = getApiUrl(movieId, false);
         const headers = {};
         const token = window.ApiClient && typeof window.ApiClient.accessToken === 'function'
             ? window.ApiClient.accessToken()
@@ -330,7 +357,7 @@
         return { wrapper, list };
     }
 
-    function appendLoadingRow(list, textValue) {
+    function appendLoadingRow(wrapper, textValue) {
         const loading = document.createElement('div');
         loading.className = 'letterboxd-loading-state';
         loading.setAttribute('role', 'status');
@@ -345,7 +372,7 @@
         text.textContent = textValue;
         loading.appendChild(text);
 
-        list.appendChild(loading);
+        wrapper.appendChild(loading);
     }
 
     function renderLoading(page) {
@@ -364,9 +391,9 @@
 
         const full = Math.floor(value);
         const half = value - full >= 0.5;
-        let stars = '\u2605'.repeat(Math.max(0, Math.min(full, 5)));
+        let stars = '★'.repeat(Math.max(0, Math.min(full, 5)));
         if (half && stars.length < 5) {
-            stars += '\u00BD';
+            stars += '½';
         }
 
         return stars || starRating;
@@ -516,55 +543,83 @@
 
     async function renderForCurrentPage() {
         if (!isMovieDetailPage()) {
-            lastRenderKey = '';
             return;
         }
 
-        const page = getActiveDetailPage();
         const itemId = getCurrentItemId();
-        if (!page || !itemId) {
+        if (!itemId) {
+            return;
+        }
+
+        // This movie is already being fetched. Re-place widget if Jellyfin removed it; don't restart.
+        if (activeKey === itemId) {
+            const livePage = getActiveDetailPage();
+            if (livePage && !livePage.querySelector('.' + widgetClass)) {
+                renderLoading(livePage);
+            }
             return;
         }
 
         const item = await getCurrentItem(itemId);
+        const page = getActiveDetailPage();
+        if (!page) {
+            return;
+        }
+
         if (item && item.Type && item.Type !== 'Movie') {
             removeExisting(page);
             return;
         }
 
         const lookupId = getLookupId(item, itemId);
-        const renderKey = itemId + ':' + lookupId;
-        if (renderKey === lastRenderKey && page.querySelector('.' + widgetClass)) {
-            return;
-        }
 
-        const sequence = ++renderSequence;
-        lastRenderKey = renderKey;
+        activeKey = itemId;
+        const myId = ++activeId;
 
         try {
-            renderLoading(page);
-            const cachedReviews = await fetchReviews(lookupId, true);
-            if (sequence !== renderSequence) {
+            // Step 1: Show initial loading state while cache fetch is in flight
+            const p0 = getActiveDetailPage();
+            if (!p0) {
+                activeKey = null;
+                return;
+            }
+            renderLoading(p0);
+
+            // Step 2: Fetch cached reviews and display them immediately
+            const cached = await fetchReviews(lookupId, true);
+            if (activeId !== myId) {
                 return;
             }
 
-            renderReviews(page, cachedReviews, true);
+            const p1 = getActiveDetailPage();
+            if (!p1) {
+                activeKey = null;
+                return;
+            }
+            renderReviews(p1, cached, true);
 
-            let reviews = cachedReviews;
+            // Step 3: On-demand search — native fetch bypasses ApiClient's internal timeout
+            let fresh = cached;
             try {
-                reviews = await withTimeout(fetchReviews(lookupId, false), topUpTimeout);
+                fresh = await withTimeout(fetchOnDemand(lookupId), topUpTimeout);
             } catch (topUpError) {
-                console.warn('Letterboxd Social: timed out while searching for additional reviews.', topUpError);
+                console.warn('Letterboxd Social: on-demand search timed out or failed.', topUpError);
             }
 
-            if (sequence !== renderSequence) {
+            if (activeId !== myId) {
                 return;
             }
 
-            renderReviews(page, reviews, false);
+            // Step 4: Update widget with final results
+            const p2 = getActiveDetailPage();
+            if (!p2) {
+                activeKey = null;
+                return;
+            }
+            renderReviews(p2, fresh, false);
         } catch (error) {
             console.warn('Letterboxd Social: failed to load reviews.', error);
-            lastRenderKey = '';
+            activeKey = null;
         }
     }
 
@@ -573,18 +628,25 @@
         renderTimer = window.setTimeout(renderForCurrentPage, delay || renderDelay);
     }
 
-    function scheduleRenderWithRetries() {
+    function onNavigation() {
+        // Only reset activeKey when the movie actually changed (or page isn't ready yet).
+        // Jellyfin fires viewshow multiple times per page load; resetting unconditionally would
+        // increment activeId mid-search and discard the on-demand result.
+        const currentId = getCurrentItemId();
+        if (!currentId || activeKey !== currentId) {
+            activeKey = null;
+        }
         scheduleRender(renderDelay);
         retryDelays.forEach(function (delay) {
             window.setTimeout(renderForCurrentPage, delay);
         });
     }
 
-    document.addEventListener('viewshow', scheduleRenderWithRetries);
-    document.addEventListener('pageshow', scheduleRenderWithRetries);
-    document.addEventListener('DOMContentLoaded', scheduleRenderWithRetries);
-    window.addEventListener('hashchange', scheduleRenderWithRetries);
-    window.addEventListener('popstate', scheduleRenderWithRetries);
+    document.addEventListener('viewshow', onNavigation);
+    document.addEventListener('pageshow', onNavigation);
+    document.addEventListener('DOMContentLoaded', onNavigation);
+    window.addEventListener('hashchange', onNavigation);
+    window.addEventListener('popstate', onNavigation);
 
     const observer = new MutationObserver(function (mutations) {
         const onlyWidgetMutations = mutations.every(function (mutation) {
@@ -593,7 +655,7 @@
         });
 
         if (!onlyWidgetMutations && getActiveDetailPage()) {
-            scheduleRender();
+            scheduleRender(renderDelay);
         }
     });
 
@@ -602,5 +664,5 @@
         subtree: true
     });
 
-    scheduleRenderWithRetries();
+    onNavigation();
 })();

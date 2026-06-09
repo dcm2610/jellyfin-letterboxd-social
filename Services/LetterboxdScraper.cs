@@ -198,6 +198,7 @@ public sealed class LetterboxdScraper
         }
 
         var requestDelay = TimeSpan.FromMilliseconds(Math.Clamp(configuration.RequestDelayMilliseconds, 0, 30000));
+        var maxPages = Math.Clamp(configuration.MaxDiaryPagesPerUser, 1, 25);
         var slug = await ResolveLetterboxdSlugForMovieAsync(movieTitle, productionYear, lookupIds, requestDelay, cancellationToken)
             .ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(slug))
@@ -227,7 +228,7 @@ public sealed class LetterboxdScraper
             var userFilmLookup = await FetchUserFilmPageDataAsync(username, slug, requestDelay, cancellationToken).ConfigureAwait(false);
             if (userFilmLookup.Status != UserFilmLookupStatus.Found)
             {
-                userFilmLookup = await FetchUserFilmGridEntryAsync(username, slug, requestDelay, cancellationToken).ConfigureAwait(false);
+                userFilmLookup = await FetchUserFilmGridEntryAsync(username, slug, requestDelay, cancellationToken, maxPages).ConfigureAwait(false);
             }
 
             if (userFilmLookup.Status != UserFilmLookupStatus.Found || userFilmLookup.PageData is null)
@@ -493,12 +494,19 @@ public sealed class LetterboxdScraper
         TimeSpan requestDelay,
         CancellationToken cancellationToken)
     {
+        var escapedUsername = Uri.EscapeDataString(username);
         var filmsPath = page == 1
-            ? $"{Uri.EscapeDataString(username)}/films/"
-            : $"{Uri.EscapeDataString(username)}/films/page/{page}/";
+            ? $"{escapedUsername}/films/"
+            : $"{escapedUsername}/films/page/{page}/";
+
+        var referer = page <= 1
+            ? $"https://letterboxd.com/{escapedUsername}/"
+            : page == 2
+                ? $"https://letterboxd.com/{escapedUsername}/films/"
+                : $"https://letterboxd.com/{escapedUsername}/films/page/{page - 1}/";
 
         _logger.Debug("Fetching watched films page " + page + " for " + username + ": " + filmsPath + ".");
-        var html = await GetStringWithLoggingAsync(filmsPath, requestDelay, cancellationToken).ConfigureAwait(false);
+        var html = await GetStringWithLoggingAsync(filmsPath, requestDelay, cancellationToken, referer).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(html))
         {
             return [];
@@ -581,55 +589,76 @@ public sealed class LetterboxdScraper
         string username,
         string slug,
         TimeSpan requestDelay,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int maxPages = 5)
     {
-        var filmsPath = $"{Uri.EscapeDataString(username)}/films/";
-        _logger.Debug("Searching readable Letterboxd films grid for " + username + " and slug " + slug + ".");
-        var html = await GetStringWithLoggingAsync(filmsPath, requestDelay, cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(html))
-        {
-            return UserFilmLookupResult.Inconclusive();
-        }
+        var escapedUsername = Uri.EscapeDataString(username);
 
-        var entry = ParseFilmEntries(html, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
-            .FirstOrDefault(item => string.Equals(item.LetterboxdSlug, slug, StringComparison.OrdinalIgnoreCase));
-        if (entry is not null)
+        for (var page = 1; page <= maxPages; page++)
         {
-            if (!string.IsNullOrWhiteSpace(entry.ReviewPath))
+            var filmsPath = page == 1
+                ? $"{escapedUsername}/films/"
+                : $"{escapedUsername}/films/page/{page}/";
+            var referer = page <= 1
+                ? $"https://letterboxd.com/{escapedUsername}/"
+                : page == 2
+                    ? $"https://letterboxd.com/{escapedUsername}/films/"
+                    : $"https://letterboxd.com/{escapedUsername}/films/page/{page - 1}/";
+
+            _logger.Debug("Searching Letterboxd films grid page " + page + " for " + username + " and slug " + slug + ".");
+            var html = await GetStringWithLoggingAsync(filmsPath, requestDelay, cancellationToken, referer).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(html))
             {
-                var reviewPage = await FetchReviewPageAsync(entry.ReviewPath, requestDelay, cancellationToken).ConfigureAwait(false);
-                if (reviewPage is not null)
-                {
-                    if (IsUsefulReviewText(reviewPage.ReviewText))
-                    {
-                        entry.ReviewText = reviewPage.ReviewText;
-                    }
-
-                    entry.ContainsSpoilers = reviewPage.ContainsSpoilers;
-                }
+                _logger.Debug("Letterboxd films grid page " + page + " was not readable for " + username + " — treating as inconclusive.");
+                return UserFilmLookupResult.Inconclusive();
             }
 
-            _logger.Debug("Found " + slug + " on readable films grid for " + username + ".");
-            return UserFilmLookupResult.Found(new UserFilmPageData(
-                entry.ReviewText,
-                entry.ContainsSpoilers,
-                entry.RatingValue));
+            var entry = ParseFilmEntries(html, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
+                .FirstOrDefault(item => string.Equals(item.LetterboxdSlug, slug, StringComparison.OrdinalIgnoreCase));
+            if (entry is not null)
+            {
+                if (!string.IsNullOrWhiteSpace(entry.ReviewPath))
+                {
+                    var reviewPage = await FetchReviewPageAsync(entry.ReviewPath, requestDelay, cancellationToken).ConfigureAwait(false);
+                    if (reviewPage is not null)
+                    {
+                        if (IsUsefulReviewText(reviewPage.ReviewText))
+                        {
+                            entry.ReviewText = reviewPage.ReviewText;
+                        }
+
+                        entry.ContainsSpoilers = reviewPage.ContainsSpoilers;
+                    }
+                }
+
+                _logger.Debug("Found " + slug + " on films grid page " + page + " for " + username + ".");
+                return UserFilmLookupResult.Found(new UserFilmPageData(
+                    entry.ReviewText,
+                    entry.ContainsSpoilers,
+                    entry.RatingValue));
+            }
+
+            if (!HasOlderFilmsPage(html))
+            {
+                _logger.Debug("Did not find " + slug + " on a fully readable films grid for " + username + " (checked " + page + " page(s)).");
+                return UserFilmLookupResult.NotFound();
+            }
+
+            if (page == maxPages)
+            {
+                _logger.Debug("Did not find " + slug + " within " + maxPages + " films grid page(s) for " + username + " — more pages exist but limit reached.");
+                return UserFilmLookupResult.Inconclusive();
+            }
         }
 
-        if (HasOlderFilmsPage(html))
-        {
-            _logger.Debug("Did not find " + slug + " on the first readable films grid for " + username + ", but older films pages exist and may be blocked.");
-            return UserFilmLookupResult.Inconclusive();
-        }
-
-        _logger.Debug("Did not find " + slug + " on a fully readable films grid for " + username + ".");
-        return UserFilmLookupResult.NotFound();
+        return UserFilmLookupResult.Inconclusive();
     }
 
     private async Task<string?> GetStringWithLoggingAsync(
         string relativePath,
         TimeSpan requestDelay,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? referer = null)
     {
         const int maxAttempts = 2;
 
@@ -640,6 +669,16 @@ public sealed class LetterboxdScraper
                 await WaitForLetterboxdRequestSlotAsync(requestDelay, cancellationToken).ConfigureAwait(false);
 
                 using var request = new HttpRequestMessage(HttpMethod.Get, relativePath);
+                request.Headers.Add("Upgrade-Insecure-Requests", "1");
+                request.Headers.Add("Sec-Fetch-Dest", "document");
+                request.Headers.Add("Sec-Fetch-Mode", "navigate");
+                request.Headers.Add("Sec-Fetch-Site", string.IsNullOrEmpty(referer) ? "none" : "same-origin");
+                request.Headers.Add("Sec-Fetch-User", "?1");
+                if (!string.IsNullOrEmpty(referer) && Uri.TryCreate(referer, UriKind.Absolute, out var refererUri))
+                {
+                    request.Headers.Referrer = refererUri;
+                }
+
                 _logger.Debug("Letterboxd HTTP GET " + relativePath + ".");
                 using var response = await _httpClientFactory.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                     .ConfigureAwait(false);
