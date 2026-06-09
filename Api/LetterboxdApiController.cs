@@ -44,6 +44,7 @@ public sealed class LetterboxdApiController : ControllerBase
     /// Gets cached Letterboxd friend ratings/reviews for a movie.
     /// </summary>
     /// <param name="movieId">TMDB id, IMDb id, Letterboxd slug, or Jellyfin internal item id.</param>
+    /// <param name="cachedOnly">Whether to return only existing cache rows without running on-demand checks.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Friend ratings/reviews.</returns>
     [Authorize]
@@ -51,6 +52,7 @@ public sealed class LetterboxdApiController : ControllerBase
     [Produces("application/json")]
     public async Task<ActionResult<IReadOnlyList<LetterboxdReviewResponse>>> GetReviews(
         [FromQuery] string? movieId,
+        [FromQuery] bool cachedOnly,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(movieId))
@@ -64,6 +66,12 @@ public sealed class LetterboxdApiController : ControllerBase
             _logger.Debug("Reviews API called for movieId=" + movieId + ".");
             var lookupIds = ResolveLookupIds(movieId, out var item);
             var reviews = await _cacheStore.GetReviewsAsync(lookupIds, cancellationToken).ConfigureAwait(false);
+            if (cachedOnly)
+            {
+                _logger.Debug("Reviews API returning " + reviews.Count + " cached-only review(s) for movieId=" + movieId + ".");
+                return Ok(reviews);
+            }
+
             var configuration = Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration();
             var configuredUsernames = configuration.UserMappings
                 .Where(static mapping => !string.IsNullOrWhiteSpace(mapping.LetterboxdUsername))

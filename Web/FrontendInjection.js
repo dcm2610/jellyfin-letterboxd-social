@@ -119,18 +119,19 @@
         return providerIds.Tmdb || providerIds.TMDB || providerIds.Imdb || providerIds.IMDB || itemId;
     }
 
-    function getApiUrl(movieId) {
+    function getApiUrl(movieId, cachedOnly) {
         if (window.ApiClient && typeof window.ApiClient.getUrl === 'function') {
-            return window.ApiClient.getUrl('ScheduledLetterboxd/Reviews', { movieId });
+            return window.ApiClient.getUrl('ScheduledLetterboxd/Reviews', { movieId, cachedOnly: cachedOnly === true });
         }
 
         const base = document.querySelector('base[href]');
         const prefix = base ? base.getAttribute('href').replace(/\/$/, '') : '';
-        return prefix + '/ScheduledLetterboxd/Reviews?movieId=' + encodeURIComponent(movieId);
+        return prefix + '/ScheduledLetterboxd/Reviews?movieId=' + encodeURIComponent(movieId)
+            + (cachedOnly === true ? '&cachedOnly=true' : '');
     }
 
-    async function fetchReviews(movieId) {
-        const url = getApiUrl(movieId);
+    async function fetchReviews(movieId, cachedOnly) {
+        const url = getApiUrl(movieId, cachedOnly);
 
         if (window.ApiClient && typeof window.ApiClient.ajax === 'function') {
             return await window.ApiClient.ajax({
@@ -287,8 +288,7 @@
         return { wrapper, list };
     }
 
-    function renderLoading(page) {
-        const shell = createWidgetShell(page);
+    function appendLoadingRow(list, textValue) {
         const loading = document.createElement('div');
         loading.className = 'letterboxd-loading-state';
         loading.setAttribute('role', 'status');
@@ -300,10 +300,15 @@
         loading.appendChild(spinner);
 
         const text = document.createElement('span');
-        text.textContent = 'Searching Letterboxd for friend ratings and reviews...';
+        text.textContent = textValue;
         loading.appendChild(text);
 
-        shell.list.appendChild(loading);
+        list.appendChild(loading);
+    }
+
+    function renderLoading(page) {
+        const shell = createWidgetShell(page);
+        appendLoadingRow(shell.list, 'Searching Letterboxd for friend ratings and reviews...');
         placeWidget(page, shell.wrapper);
     }
 
@@ -345,12 +350,18 @@
         });
     }
 
-    function renderReviews(page, reviews) {
+    function renderReviews(page, reviews, isSearching) {
         const shell = createWidgetShell(page);
         const wrapper = shell.wrapper;
         const list = shell.list;
 
         if (!Array.isArray(reviews) || reviews.length === 0) {
+            if (isSearching) {
+                appendLoadingRow(list, 'Searching Letterboxd for friend ratings and reviews...');
+                placeWidget(page, wrapper);
+                return;
+            }
+
             const empty = document.createElement('div');
             empty.className = 'letterboxd-empty-state';
             empty.textContent = 'No configured Letterboxd friend has logged this film yet.';
@@ -452,6 +463,10 @@
             list.appendChild(card);
         });
 
+        if (isSearching) {
+            appendLoadingRow(list, 'Showing cached reviews. Searching for more Letterboxd friends...');
+        }
+
         placeWidget(page, wrapper);
     }
 
@@ -484,12 +499,19 @@
 
         try {
             renderLoading(page);
-            const reviews = await fetchReviews(lookupId);
+            const cachedReviews = await fetchReviews(lookupId, true);
             if (sequence !== renderSequence) {
                 return;
             }
 
-            renderReviews(page, reviews);
+            renderReviews(page, cachedReviews, true);
+
+            const reviews = await fetchReviews(lookupId, false);
+            if (sequence !== renderSequence) {
+                return;
+            }
+
+            renderReviews(page, reviews, false);
         } catch (error) {
             console.warn('Letterboxd Social: failed to load reviews.', error);
             lastRenderKey = '';
