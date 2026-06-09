@@ -1,4 +1,4 @@
-# Jellyfin.Plugin.LetterboxdSocial
+﻿# Jellyfin.Plugin.LetterboxdSocial
 
 Jellyfin.Plugin.LetterboxdSocial scrapes configured public Letterboxd RSS feeds for review text and public Letterboxd films pages for ratings, caches friends' movie ratings and reviews in SQLite, and exposes them on Jellyfin movie detail pages.
 
@@ -19,7 +19,7 @@ The repo root contains `manifest.json` for Jellyfin's plugin repository URL.
 The manifest points at the release asset URL:
 
 ```text
-https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.38/LetterboxdSocial_1.0.0.38.zip
+https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.39/LetterboxdSocial_1.0.0.39.zip
 ```
 
 Upload `dist/LetterboxdSocial_1.0.0.38.zip` as that release asset. Jellyfin can use the raw GitHub URL for `manifest.json` as a permanent update manifest.
