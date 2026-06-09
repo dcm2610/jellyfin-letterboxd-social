@@ -1,5 +1,7 @@
 ﻿# Jellyfin.Plugin.LetterboxdSocial
 
+> **This plugin is a proof of concept and is not production ready. It should not be used on live Jellyfin servers. It is provided as-is for experimentation and development purposes only.**
+
 Jellyfin.Plugin.LetterboxdSocial scrapes configured public Letterboxd RSS feeds for review text and public Letterboxd films pages for ratings, caches friends' movie ratings and reviews in SQLite, and exposes them on Jellyfin movie detail pages.
 
 ## Build
