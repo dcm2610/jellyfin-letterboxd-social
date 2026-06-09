@@ -10,6 +10,7 @@ public sealed class LetterboxdCacheStore
 {
     private readonly LetterboxdSocialFileLogger _logger;
     private readonly SemaphoreSlim _databaseLock = new(1, 1);
+    private static readonly TimeSpan DirectMissCheckTtl = TimeSpan.FromHours(24);
     private bool _initialized;
 
     /// <summary>
@@ -343,8 +344,14 @@ ORDER BY display_name COLLATE NOCASE, letterboxd_username COLLATE NOCASE;";
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
             await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT letterboxd_username FROM user_film_checks WHERE letterboxd_slug = $slug;";
+            var cutoff = DateTimeOffset.UtcNow.Subtract(DirectMissCheckTtl).ToString("O");
+            command.CommandText = @"
+SELECT letterboxd_username
+FROM user_film_checks
+WHERE letterboxd_slug = $slug
+    AND (has_record != 0 OR checked_at >= $cutoff);";
             command.Parameters.AddWithValue("$slug", letterboxdSlug.Trim());
+            command.Parameters.AddWithValue("$cutoff", cutoff);
 
             var usernames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -353,6 +360,7 @@ ORDER BY display_name COLLATE NOCASE, letterboxd_username COLLATE NOCASE;";
                 usernames.Add(reader.GetString(0));
             }
 
+            _logger.Debug("Direct film checks for " + letterboxdSlug + " returned " + usernames.Count + " recently checked username(s).");
             return usernames;
         }
         catch (Exception ex)

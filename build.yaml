@@ -1,7 +1,7 @@
 ---
 name: "Letterboxd Social"
 guid: "449b09f6-a9b5-4cf0-ba7d-433c11e9c0ad"
-version: "1.0.0.34"
+version: "1.0.0.35"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 owner: "Jellyfin.Plugin.LetterboxdSocial"
@@ -13,4 +13,4 @@ category: "Metadata"
 artifacts:
   - "Jellyfin.Plugin.LetterboxdSocial.dll"
 changelog: >
-  Fix the widget loading loop caused by self-triggered DOM renders and add a versioned frontend script cachebuster.
+  Add diagnostics for on-demand friend checks and expire negative direct-film checks after 24 hours.

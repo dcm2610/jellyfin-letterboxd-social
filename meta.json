@@ -1,6 +1,6 @@
 {
   "category": "Metadata",
-  "changelog": "Fix the widget loading loop caused by self-triggered DOM renders and add a versioned frontend script cachebuster.",
+  "changelog": "Add diagnostics for on-demand friend checks and expire negative direct-film checks after 24 hours.",
   "description": "Scrapes configured public Letterboxd RSS feeds and film pages and displays friends' ratings, reviews, and watched status on Jellyfin movie detail pages.",
   "guid": "449b09f6-a9b5-4cf0-ba7d-433c11e9c0ad",
   "name": "Letterboxd Social",
@@ -8,5 +8,5 @@
   "owner": "Jellyfin.Plugin.LetterboxdSocial",
   "targetAbi": "10.11.0.0",
   "timestamp": "2026-06-09T00:00:00.0000000Z",
-  "version": "1.0.0.34"
+  "version": "1.0.0.35"
 }

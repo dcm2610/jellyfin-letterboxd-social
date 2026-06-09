@@ -78,6 +78,12 @@ public sealed class LetterboxdApiController : ControllerBase
                 .Select(static mapping => mapping.LetterboxdUsername.Trim())
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            var cachedUsernames = reviews
+                .Select(static review => review.Username)
+                .Where(static username => !string.IsNullOrWhiteSpace(username))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            _logger.Debug("On-demand review check state for movieId=" + movieId + ": configuredUsers=" + configuredUsernames.Length + " [" + string.Join(", ", configuredUsernames) + "], cachedUsers=" + cachedUsernames.Length + " [" + string.Join(", ", cachedUsernames) + "].");
 
             if (ShouldRunOnDemandCheck(reviews, configuredUsernames, item))
             {
@@ -85,19 +91,29 @@ public sealed class LetterboxdApiController : ControllerBase
                     reviews,
                     configuredUsernames,
                     cancellationToken).ConfigureAwait(false);
-
-                var savedRows = await _scraper.ScrapeConfiguredUsersForMovieAsync(
-                    configuration,
-                    item!.Name,
-                    item.ProductionYear,
-                    lookupIds,
-                    targetUsernames,
-                    cancellationToken).ConfigureAwait(false);
-
-                if (savedRows > 0)
+                if (targetUsernames is not null && targetUsernames.Count == 0)
                 {
-                    reviews = await _cacheStore.GetReviewsAsync(lookupIds, cancellationToken).ConfigureAwait(false);
+                    _logger.Debug("On-demand review check skipped because all missing users were already checked recently.");
                 }
+                else
+                {
+                    var savedRows = await _scraper.ScrapeConfiguredUsersForMovieAsync(
+                        configuration,
+                        item!.Name,
+                        item.ProductionYear,
+                        lookupIds,
+                        targetUsernames,
+                        cancellationToken).ConfigureAwait(false);
+
+                    if (savedRows > 0)
+                    {
+                        reviews = await _cacheStore.GetReviewsAsync(lookupIds, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+            }
+            else
+            {
+                _logger.Debug("On-demand review check skipped because no configured users are missing from the cache or the Jellyfin item could not be resolved.");
             }
 
             _logger.Debug("Reviews API returning " + reviews.Count + " review(s) for movieId=" + movieId + ".");
@@ -135,9 +151,11 @@ public sealed class LetterboxdApiController : ControllerBase
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : await _cacheStore.GetCheckedUsernamesForFilmAsync(slug, cancellationToken).ConfigureAwait(false);
 
-        return configuredUsernames
+        var targetUsernames = configuredUsernames
             .Where(username => !cachedUsernames.Contains(username) && !checkedUsernames.Contains(username))
             .ToArray();
+        _logger.Debug("On-demand review check targets for slug " + (slug ?? "(unknown)") + ": cachedUsers=[" + string.Join(", ", cachedUsernames) + "], recentlyCheckedUsers=[" + string.Join(", ", checkedUsernames) + "], targetUsers=[" + string.Join(", ", targetUsernames) + "].");
+        return targetUsernames;
     }
 
     private static bool ShouldRunOnDemandCheck(
