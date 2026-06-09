@@ -288,7 +288,7 @@
             '.letterboxd-review-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,28rem),1fr));gap:.62rem;}',
             '.letterboxd-user-card{min-width:0;overflow:hidden;padding:.68rem .74rem .72rem;background:rgba(0,0,0,.13);border:1px solid var(--lighterBorderColor,rgba(255,255,255,.10));border-radius:7px;}',
             '.letterboxd-empty-state{grid-column:1 / -1;min-width:0;padding:.72rem .78rem;background:rgba(0,0,0,.10);border:1px solid var(--lighterBorderColor,rgba(255,255,255,.10));border-radius:7px;color:var(--dimTextColor,rgba(255,255,255,.68));font-size:.9rem;font-weight:600;line-height:1.4;}',
-            '.letterboxd-loading-state{grid-column:1 / -1;display:flex;align-items:center;gap:.62rem;min-width:0;padding:.72rem .78rem;background:rgba(0,0,0,.10);border:1px solid var(--lighterBorderColor,rgba(255,255,255,.10));border-radius:7px;color:var(--dimTextColor,rgba(255,255,255,.68));font-size:.9rem;font-weight:700;line-height:1.4;}',
+            '.letterboxd-loading-state{display:flex;align-items:center;gap:.62rem;width:100%;min-width:0;margin-top:.62rem;padding:.72rem .78rem;background:rgba(0,0,0,.10);border:1px solid var(--lighterBorderColor,rgba(255,255,255,.10));border-radius:7px;color:var(--dimTextColor,rgba(255,255,255,.68));font-size:.9rem;font-weight:700;line-height:1.4;}',
             '.letterboxd-loading-spinner{flex:0 0 auto;width:1rem;height:1rem;border-radius:50%;border:2px solid rgba(255,255,255,.18);border-top-color:#00e054;animation:letterboxd-spin .85s linear infinite;}',
             '@keyframes letterboxd-spin{to{transform:rotate(360deg);}}',
             '.letterboxd-user-heading{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:start;gap:.72rem;margin:0 0 .42rem;}',
@@ -350,7 +350,7 @@
 
     function renderLoading(page) {
         const shell = createWidgetShell(page);
-        appendLoadingRow(shell.list, 'Searching Letterboxd for friend ratings and reviews...');
+        appendLoadingRow(shell.wrapper, 'Searching Letterboxd for friend ratings and reviews...');
         placeWidget(page, shell.wrapper);
     }
 
@@ -400,7 +400,7 @@
         const normalizedReviews = normalizeReviews(reviews);
         if (normalizedReviews.length === 0) {
             if (isSearching) {
-                appendLoadingRow(list, 'Searching Letterboxd for friend ratings and reviews...');
+                appendLoadingRow(wrapper, 'Searching Letterboxd for friend ratings and reviews...');
                 placeWidget(page, wrapper);
                 return;
             }
@@ -508,7 +508,7 @@
         });
 
         if (isSearching) {
-            appendLoadingRow(list, 'Showing cached reviews. Searching for more Letterboxd friends...');
+            appendLoadingRow(wrapper, 'Showing cached reviews. Searching for more Letterboxd friends...');
         }
 
         placeWidget(page, wrapper);

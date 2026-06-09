@@ -8,11 +8,11 @@
     "category": "Metadata",
     "versions": [
       {
-        "version": "1.0.0.36",
-        "changelog": "Add a manual scheduled task to reset on-demand direct film check markers for debugging.",
+        "version": "1.0.0.37",
+        "changelog": "Keep cached review card sizing stable while showing the background search status row.",
         "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.36/LetterboxdSocial_1.0.0.36.zip",
-        "checksum": "1A88C41BCCC3E0DBF4CAEF86BBE6CE2F",
+        "sourceUrl": "https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.37/LetterboxdSocial_1.0.0.37.zip",
+        "checksum": "894791A106D616A7872EE2EA639F0776",
         "timestamp": "2026-06-09T00:00:00Z"
       }
     ]
