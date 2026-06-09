@@ -1,0 +1,16 @@
+---
+name: "Letterboxd Social"
+guid: "449b09f6-a9b5-4cf0-ba7d-433c11e9c0ad"
+version: "1.0.0.30"
+targetAbi: "10.11.0.0"
+framework: "net9.0"
+owner: "Jellyfin.Plugin.LetterboxdSocial"
+overview: "Displays configured Letterboxd friends' ratings and reviews on Jellyfin movie detail pages."
+description: >
+  Scrapes configured public Letterboxd RSS feeds and film pages on a schedule, caches ratings,
+  reviews, and watched status locally in SQLite, and exposes them to Jellyfin Web through a native plugin API endpoint.
+category: "Metadata"
+artifacts:
+  - "Jellyfin.Plugin.LetterboxdSocial.dll"
+changelog: >
+  Improve lookup matching and add an on-demand direct-film fallback for older films when Letterboxd pagination is blocked.

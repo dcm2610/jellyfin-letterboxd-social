@@ -1,0 +1,40 @@
+<div id="letterboxdSocialConfigurationPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="letterboxdSocialConfigurationForm">
+                <div class="verticalSection letterboxd-social-config-section">
+                    <div class="sectionTitleContainer sectionTitleContainer-cards">
+                        <h2 class="sectionTitle">Letterboxd Social</h2>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="maxDiaryPagesPerUser">Film pages per account</label>
+                        <input is="emby-input" id="maxDiaryPagesPerUser" name="maxDiaryPagesPerUser" type="number" min="1" max="25" step="1" />
+                        <div class="fieldDescription">Each Letterboxd films page contains many rated films. Higher values scan further back.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="requestDelayMilliseconds">Request delay in milliseconds</label>
+                        <input is="emby-input" id="requestDelayMilliseconds" name="requestDelayMilliseconds" type="number" min="0" max="30000" step="250" />
+                        <div class="fieldDescription">Delay between Letterboxd HTTP requests. Higher values are slower but gentler on hosted servers.</div>
+                    </div>
+                </div>
+
+                <div class="verticalSection letterboxd-social-config-section">
+                    <div class="sectionTitleContainer sectionTitleContainer-cards">
+                        <h2 class="sectionTitle">Letterboxd accounts</h2>
+                        <button is="emby-button" type="button" class="raised button-submit" id="addLetterboxdUserMappingButton">
+                            <span>Add account</span>
+                        </button>
+                    </div>
+                    <div id="letterboxdUserMappings"></div>
+                </div>
+
+                <div>
+                    <button is="emby-button" type="submit" class="raised button-submit block">
+                        <span>Save</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <script type="text/javascript" src="configurationpage?name=letterboxdSocialConfigurationJs"></script>
+</div>

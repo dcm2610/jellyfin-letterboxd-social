@@ -1,0 +1,35 @@
+# Build output
+bin/
+obj/
+dist/
+
+# Local .NET SDK/cache used for development on this machine
+.dotnet/
+.dotnet-home/
+.dotnet-install.ps1
+
+# Local project notes and handoff files
+PROJECT_HANDOFF.md
+todo.txt
+theme-reference/
+
+# IDE/user state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs, caches, and temporary files
+*.log
+*.tmp
+*.cache
+*.db
+*.db-shm
+*.db-wal
+
+# Packaged artifacts should be attached to GitHub releases, not committed
+*.zip
+*.nupkg
