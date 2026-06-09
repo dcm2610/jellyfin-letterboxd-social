@@ -8,6 +8,14 @@
         "category":  "Metadata",
         "versions":  [
                          {
+                             "version":  "1.0.0.43",
+                             "changelog":  "Fix widget not updating: don\u0027t reset render state on same-movie viewshow events",
+                             "targetAbi":  "10.11.0.0",
+                             "sourceUrl":  "https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.43/LetterboxdSocial_1.0.0.43.zip",
+                             "checksum":  "93D416829B67E996C95950AF21A68DBA",
+                             "timestamp":  "2026-06-09T00:00:00Z"
+                         },
+                         {
                              "version":  "1.0.0.42",
                              "changelog":  "Fix widget not updating after on-demand search — clean state machine, native fetch to bypass ApiClient timeout",
                              "targetAbi":  "10.11.0.0",

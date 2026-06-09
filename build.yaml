@@ -1,7 +1,7 @@
 ﻿---
 name: "Letterboxd Social"
 guid: "449b09f6-a9b5-4cf0-ba7d-433c11e9c0ad"
-version: "1.0.0.42"
+version: "1.0.0.43"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 owner: "Jellyfin.Plugin.LetterboxdSocial"

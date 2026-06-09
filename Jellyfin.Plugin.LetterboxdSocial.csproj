@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <Version>1.0.0.42</Version>
+    <Version>1.0.0.43</Version>
     <Authors>Jellyfin.Plugin.LetterboxdSocial</Authors>
     <Description>Displays configured Letterboxd friends' movie ratings and reviews inside Jellyfin.</Description>
   </PropertyGroup>
