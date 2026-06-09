@@ -64,13 +64,26 @@ public sealed class LetterboxdApiController : ControllerBase
             _logger.Debug("Reviews API called for movieId=" + movieId + ".");
             var lookupIds = ResolveLookupIds(movieId, out var item);
             var reviews = await _cacheStore.GetReviewsAsync(lookupIds, cancellationToken).ConfigureAwait(false);
-            if (reviews.Count == 0 && item is not null && !string.IsNullOrWhiteSpace(item.Name))
+            var configuration = Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration();
+            var configuredUsernames = configuration.UserMappings
+                .Where(static mapping => !string.IsNullOrWhiteSpace(mapping.LetterboxdUsername))
+                .Select(static mapping => mapping.LetterboxdUsername.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (ShouldRunOnDemandCheck(reviews, configuredUsernames, item))
             {
+                var targetUsernames = await GetUncheckedTargetUsernamesAsync(
+                    reviews,
+                    configuredUsernames,
+                    cancellationToken).ConfigureAwait(false);
+
                 var savedRows = await _scraper.ScrapeConfiguredUsersForMovieAsync(
-                    Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration(),
-                    item.Name,
+                    configuration,
+                    item!.Name,
                     item.ProductionYear,
                     lookupIds,
+                    targetUsernames,
                     cancellationToken).ConfigureAwait(false);
 
                 if (savedRows > 0)
@@ -91,6 +104,50 @@ public sealed class LetterboxdApiController : ControllerBase
             _logger.Error(ex, "Failed to return Letterboxd Social reviews for movie id " + movieId + ".");
             return Ok(Array.Empty<LetterboxdReviewResponse>());
         }
+    }
+
+    private async Task<IReadOnlyCollection<string>?> GetUncheckedTargetUsernamesAsync(
+        IReadOnlyCollection<LetterboxdReviewResponse> reviews,
+        IReadOnlyCollection<string> configuredUsernames,
+        CancellationToken cancellationToken)
+    {
+        if (reviews.Count == 0)
+        {
+            return null;
+        }
+
+        var cachedUsernames = reviews
+            .Select(static review => review.Username)
+            .Where(static username => !string.IsNullOrWhiteSpace(username))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var slug = reviews
+            .Select(static review => review.LetterboxdSlug)
+            .FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value));
+        var checkedUsernames = string.IsNullOrWhiteSpace(slug)
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : await _cacheStore.GetCheckedUsernamesForFilmAsync(slug, cancellationToken).ConfigureAwait(false);
+
+        return configuredUsernames
+            .Where(username => !cachedUsernames.Contains(username) && !checkedUsernames.Contains(username))
+            .ToArray();
+    }
+
+    private static bool ShouldRunOnDemandCheck(
+        IReadOnlyCollection<LetterboxdReviewResponse> reviews,
+        IReadOnlyCollection<string> configuredUsernames,
+        BaseItem? item)
+    {
+        if (item is null || string.IsNullOrWhiteSpace(item.Name) || configuredUsernames.Count == 0)
+        {
+            return false;
+        }
+
+        var cachedUsernames = reviews
+            .Select(static review => review.Username)
+            .Where(static username => !string.IsNullOrWhiteSpace(username))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+        return cachedUsernames < configuredUsernames.Count;
     }
 
     /// <summary>

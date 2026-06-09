@@ -8,11 +8,11 @@
     "category": "Metadata",
     "versions": [
       {
-        "version": "1.0.0.30",
-        "changelog": "Improve lookup matching and add an on-demand direct-film fallback for older films when Letterboxd pagination is blocked.",
+        "version": "1.0.0.31",
+        "changelog": "Top up partially cached movie pages by checking missing Letterboxd friends on demand and show a loading state while reviews are fetched.",
         "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.30/LetterboxdSocial_1.0.0.30.zip",
-        "checksum": "AFEE72D9FC041B3746F43BB15E127F02",
+        "sourceUrl": "https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.31/LetterboxdSocial_1.0.0.31.zip",
+        "checksum": "C823E7D8BA1179C6D88594DD980E3522",
         "timestamp": "2026-06-09T00:00:00Z"
       }
     ]

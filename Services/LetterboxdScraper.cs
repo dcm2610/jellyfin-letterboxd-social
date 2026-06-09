@@ -166,6 +166,7 @@ public sealed class LetterboxdScraper
     /// <param name="movieTitle">Movie title from Jellyfin.</param>
     /// <param name="productionYear">Production year from Jellyfin, when available.</param>
     /// <param name="lookupIds">Known Jellyfin/TMDB/IMDb lookup ids for validation.</param>
+    /// <param name="targetLetterboxdUsernames">Specific Letterboxd usernames to check, or null to check all configured users.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The number of cache rows saved.</returns>
     public async Task<int> ScrapeConfiguredUsersForMovieAsync(
@@ -173,10 +174,18 @@ public sealed class LetterboxdScraper
         string movieTitle,
         int? productionYear,
         IReadOnlyCollection<string> lookupIds,
+        IReadOnlyCollection<string>? targetLetterboxdUsernames,
         CancellationToken cancellationToken)
     {
+        var targetSet = targetLetterboxdUsernames is null
+            ? null
+            : targetLetterboxdUsernames
+                .Where(static username => !string.IsNullOrWhiteSpace(username))
+                .Select(static username => username.Trim())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var mappings = configuration.UserMappings
             .Where(static mapping => !string.IsNullOrWhiteSpace(mapping.LetterboxdUsername))
+            .Where(mapping => targetSet is null || targetSet.Contains(mapping.LetterboxdUsername.Trim()))
             .ToArray();
 
         if (mappings.Length == 0 || string.IsNullOrWhiteSpace(movieTitle))
@@ -194,17 +203,27 @@ public sealed class LetterboxdScraper
         }
 
         var externalIds = await ResolveExternalIdsAsync(slug, requestDelay, cancellationToken).ConfigureAwait(false);
+        var checkedUsernames = await _cacheStore.GetCheckedUsernamesForFilmAsync(slug, cancellationToken).ConfigureAwait(false);
         var savedRows = 0;
+        var checkedUsers = 0;
 
         foreach (var mapping in mappings)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             var username = mapping.LetterboxdUsername.Trim();
+            if (checkedUsernames.Contains(username))
+            {
+                _logger.Debug("Skipping on-demand direct check for " + username + " and " + slug + " because it has already been checked.");
+                continue;
+            }
+
+            checkedUsers++;
             var displayName = string.IsNullOrWhiteSpace(mapping.DisplayName) ? username : mapping.DisplayName.Trim();
             var userFilmPage = await FetchUserFilmPageDataAsync(username, slug, requestDelay, cancellationToken).ConfigureAwait(false);
             if (userFilmPage is null)
             {
+                await _cacheStore.SaveUserFilmCheckAsync(username, slug, false, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
@@ -231,7 +250,7 @@ public sealed class LetterboxdScraper
             savedRows += records.Length;
         }
 
-        _logger.Info("On-demand scrape for " + movieTitle + " (" + slug + ") saved " + savedRows + " cache row(s).");
+        _logger.Info("On-demand scrape for " + movieTitle + " (" + slug + ") checked " + checkedUsers + " user(s) and saved " + savedRows + " cache row(s).");
         return savedRows;
     }
 

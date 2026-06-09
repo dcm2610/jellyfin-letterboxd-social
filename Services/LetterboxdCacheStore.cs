@@ -252,12 +252,113 @@ ORDER BY display_name COLLATE NOCASE, letterboxd_username COLLATE NOCASE;";
             }
 
             await InsertReviewRecordsAsync(connection, (SqliteTransaction)transaction, records, cancellationToken).ConfigureAwait(false);
+            await UpsertUserFilmCheckAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                letterboxdUsername,
+                letterboxdSlug,
+                records.Count > 0,
+                cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             _logger.Info("Saved " + records.Count + " on-demand Letterboxd cache row(s) for " + letterboxdUsername + " and " + letterboxdSlug + ".");
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to save movie cache rows for " + letterboxdUsername + " and " + letterboxdSlug + ".");
+        }
+        finally
+        {
+            _databaseLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Marks a direct per-user film page as checked, including misses.
+    /// </summary>
+    /// <param name="letterboxdUsername">Letterboxd username.</param>
+    /// <param name="letterboxdSlug">Letterboxd film slug.</param>
+    /// <param name="hasRecord">Whether a watched/rated/reviewed record was found.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    public async Task SaveUserFilmCheckAsync(
+        string letterboxdUsername,
+        string letterboxdSlug,
+        bool hasRecord,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(letterboxdUsername) || string.IsNullOrWhiteSpace(letterboxdSlug))
+        {
+            return;
+        }
+
+        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        await _databaseLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            await using var connection = CreateConnection();
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+            await UpsertUserFilmCheckAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                letterboxdUsername,
+                letterboxdSlug,
+                hasRecord,
+                cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "Failed to save direct film check for " + letterboxdUsername + " and " + letterboxdSlug + ".");
+        }
+        finally
+        {
+            _databaseLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Gets users whose direct film page has already been checked.
+    /// </summary>
+    /// <param name="letterboxdSlug">Letterboxd film slug.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Checked usernames.</returns>
+    public async Task<IReadOnlySet<string>> GetCheckedUsernamesForFilmAsync(
+        string letterboxdSlug,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(letterboxdSlug))
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        await _databaseLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            await using var connection = CreateConnection();
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT letterboxd_username FROM user_film_checks WHERE letterboxd_slug = $slug;";
+            command.Parameters.AddWithValue("$slug", letterboxdSlug.Trim());
+
+            var usernames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                usernames.Add(reader.GetString(0));
+            }
+
+            return usernames;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "Failed to read direct film checks for " + letterboxdSlug + ".");
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
         finally
         {
@@ -464,6 +565,29 @@ INSERT INTO reviews (
         }
     }
 
+    private static async Task UpsertUserFilmCheckAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string letterboxdUsername,
+        string letterboxdSlug,
+        bool hasRecord,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = @"
+INSERT INTO user_film_checks (letterboxd_username, letterboxd_slug, has_record, checked_at)
+VALUES ($username, $slug, $has_record, $checked_at)
+ON CONFLICT(letterboxd_username, letterboxd_slug) DO UPDATE SET
+    has_record = excluded.has_record,
+    checked_at = excluded.checked_at;";
+        command.Parameters.AddWithValue("$username", letterboxdUsername.Trim());
+        command.Parameters.AddWithValue("$slug", letterboxdSlug.Trim());
+        command.Parameters.AddWithValue("$has_record", hasRecord ? 1 : 0);
+        command.Parameters.AddWithValue("$checked_at", DateTimeOffset.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
     {
         if (_initialized)
@@ -551,6 +675,14 @@ CREATE TABLE IF NOT EXISTS film_ids (
     tmdb_id TEXT NULL,
     imdb_id TEXT NULL,
     updated_at TEXT NOT NULL
+);",
+            @"
+CREATE TABLE IF NOT EXISTS user_film_checks (
+    letterboxd_username TEXT NOT NULL,
+    letterboxd_slug TEXT NOT NULL,
+    has_record INTEGER NOT NULL DEFAULT 0,
+    checked_at TEXT NOT NULL,
+    PRIMARY KEY (letterboxd_username, letterboxd_slug)
 );"
         ];
     }

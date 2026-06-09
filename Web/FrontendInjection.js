@@ -245,6 +245,9 @@
             '.letterboxd-review-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,28rem),1fr));gap:.62rem;}',
             '.letterboxd-user-card{min-width:0;overflow:hidden;padding:.68rem .74rem .72rem;background:rgba(0,0,0,.13);border:1px solid var(--lighterBorderColor,rgba(255,255,255,.10));border-radius:7px;}',
             '.letterboxd-empty-state{grid-column:1 / -1;min-width:0;padding:.72rem .78rem;background:rgba(0,0,0,.10);border:1px solid var(--lighterBorderColor,rgba(255,255,255,.10));border-radius:7px;color:var(--dimTextColor,rgba(255,255,255,.68));font-size:.9rem;font-weight:600;line-height:1.4;}',
+            '.letterboxd-loading-state{grid-column:1 / -1;display:flex;align-items:center;gap:.62rem;min-width:0;padding:.72rem .78rem;background:rgba(0,0,0,.10);border:1px solid var(--lighterBorderColor,rgba(255,255,255,.10));border-radius:7px;color:var(--dimTextColor,rgba(255,255,255,.68));font-size:.9rem;font-weight:700;line-height:1.4;}',
+            '.letterboxd-loading-spinner{flex:0 0 auto;width:1rem;height:1rem;border-radius:50%;border:2px solid rgba(255,255,255,.18);border-top-color:#00e054;animation:letterboxd-spin .85s linear infinite;}',
+            '@keyframes letterboxd-spin{to{transform:rotate(360deg);}}',
             '.letterboxd-user-heading{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:start;gap:.72rem;margin:0 0 .42rem;}',
             '.letterboxd-user-identity{display:flex;align-items:center;gap:.48rem;min-width:0;}',
             '.letterboxd-user-avatar{flex:0 0 auto;width:1.72rem;height:1.72rem;border-radius:50%;object-fit:cover;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);box-shadow:0 2px 8px rgba(0,0,0,.22);}',
@@ -262,6 +265,46 @@
         ].join('');
 
         document.head.appendChild(style);
+    }
+
+    function createWidgetShell(page) {
+        removeExisting(page);
+        ensureWidgetStyles();
+
+        const wrapper = document.createElement('section');
+        wrapper.className = widgetClass + ' letterboxd-card-wrapper';
+        wrapper.setAttribute('aria-label', 'Letterboxd friend reviews');
+
+        const header = document.createElement('h3');
+        header.className = 'letterboxd-widget-title';
+        header.textContent = 'Letterboxd Friends';
+        wrapper.appendChild(header);
+
+        const list = document.createElement('div');
+        list.className = 'letterboxd-review-list';
+        wrapper.appendChild(list);
+
+        return { wrapper, list };
+    }
+
+    function renderLoading(page) {
+        const shell = createWidgetShell(page);
+        const loading = document.createElement('div');
+        loading.className = 'letterboxd-loading-state';
+        loading.setAttribute('role', 'status');
+        loading.setAttribute('aria-live', 'polite');
+
+        const spinner = document.createElement('span');
+        spinner.className = 'letterboxd-loading-spinner';
+        spinner.setAttribute('aria-hidden', 'true');
+        loading.appendChild(spinner);
+
+        const text = document.createElement('span');
+        text.textContent = 'Searching Letterboxd for friend ratings and reviews...';
+        loading.appendChild(text);
+
+        shell.list.appendChild(loading);
+        placeWidget(page, shell.wrapper);
     }
 
     function createStarText(review) {
@@ -303,22 +346,9 @@
     }
 
     function renderReviews(page, reviews) {
-        removeExisting(page);
-
-        ensureWidgetStyles();
-
-        const wrapper = document.createElement('section');
-        wrapper.className = widgetClass + ' letterboxd-card-wrapper';
-        wrapper.setAttribute('aria-label', 'Letterboxd friend reviews');
-
-        const header = document.createElement('h3');
-        header.className = 'letterboxd-widget-title';
-        header.textContent = 'Letterboxd Friends';
-        wrapper.appendChild(header);
-
-        const list = document.createElement('div');
-        list.className = 'letterboxd-review-list';
-        wrapper.appendChild(list);
+        const shell = createWidgetShell(page);
+        const wrapper = shell.wrapper;
+        const list = shell.list;
 
         if (!Array.isArray(reviews) || reviews.length === 0) {
             const empty = document.createElement('div');
@@ -453,6 +483,7 @@
         lastRenderKey = renderKey;
 
         try {
+            renderLoading(page);
             const reviews = await fetchReviews(lookupId);
             if (sequence !== renderSequence) {
                 return;
