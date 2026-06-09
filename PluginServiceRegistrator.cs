@@ -21,6 +21,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<LetterboxdCacheStore>();
         serviceCollection.AddSingleton<LetterboxdScraper>();
         serviceCollection.AddTransient<IScheduledTask, LetterboxdScraperTask>();
+        serviceCollection.AddTransient<IScheduledTask, LetterboxdDirectCheckResetTask>();
         serviceCollection.AddSingleton<IStartupFilter, LetterboxdSocialStartupFilter>();
     }
 }

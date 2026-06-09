@@ -93,7 +93,7 @@ public sealed class LetterboxdApiController : ControllerBase
                     cancellationToken).ConfigureAwait(false);
                 if (targetUsernames is not null && targetUsernames.Count == 0)
                 {
-                    _logger.Debug("On-demand review check skipped because all missing users were already checked recently.");
+                    _logger.Debug("On-demand review check skipped because all missing users already have direct check markers.");
                 }
                 else
                 {
@@ -154,7 +154,7 @@ public sealed class LetterboxdApiController : ControllerBase
         var targetUsernames = configuredUsernames
             .Where(username => !cachedUsernames.Contains(username) && !checkedUsernames.Contains(username))
             .ToArray();
-        _logger.Debug("On-demand review check targets for slug " + (slug ?? "(unknown)") + ": cachedUsers=[" + string.Join(", ", cachedUsernames) + "], recentlyCheckedUsers=[" + string.Join(", ", checkedUsernames) + "], targetUsers=[" + string.Join(", ", targetUsernames) + "].");
+        _logger.Debug("On-demand review check targets for slug " + (slug ?? "(unknown)") + ": cachedUsers=[" + string.Join(", ", cachedUsernames) + "], checkedUsers=[" + string.Join(", ", checkedUsernames) + "], targetUsers=[" + string.Join(", ", targetUsernames) + "].");
         return targetUsernames;
     }
 

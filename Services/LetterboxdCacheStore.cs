@@ -10,7 +10,6 @@ public sealed class LetterboxdCacheStore
 {
     private readonly LetterboxdSocialFileLogger _logger;
     private readonly SemaphoreSlim _databaseLock = new(1, 1);
-    private static readonly TimeSpan DirectMissCheckTtl = TimeSpan.FromHours(24);
     private bool _initialized;
 
     /// <summary>
@@ -344,14 +343,11 @@ ORDER BY display_name COLLATE NOCASE, letterboxd_username COLLATE NOCASE;";
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
             await using var command = connection.CreateCommand();
-            var cutoff = DateTimeOffset.UtcNow.Subtract(DirectMissCheckTtl).ToString("O");
             command.CommandText = @"
 SELECT letterboxd_username
 FROM user_film_checks
-WHERE letterboxd_slug = $slug
-    AND (has_record != 0 OR checked_at >= $cutoff);";
+WHERE letterboxd_slug = $slug;";
             command.Parameters.AddWithValue("$slug", letterboxdSlug.Trim());
-            command.Parameters.AddWithValue("$cutoff", cutoff);
 
             var usernames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -360,13 +356,45 @@ WHERE letterboxd_slug = $slug
                 usernames.Add(reader.GetString(0));
             }
 
-            _logger.Debug("Direct film checks for " + letterboxdSlug + " returned " + usernames.Count + " recently checked username(s).");
+            _logger.Debug("Direct film checks for " + letterboxdSlug + " returned " + usernames.Count + " checked username(s).");
             return usernames;
         }
         catch (Exception ex)
         {
             _logger.Warning(ex, "Failed to read direct film checks for " + letterboxdSlug + ".");
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            _databaseLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Clears direct per-user film check markers without deleting cached ratings or reviews.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The number of deleted check markers.</returns>
+    public async Task<int> ClearUserFilmChecksAsync(CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        await _databaseLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            await using var connection = CreateConnection();
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM user_film_checks;";
+            var deletedRows = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            _logger.Info("Cleared " + deletedRows + " Letterboxd direct film check marker(s). Cached ratings and reviews were not deleted.");
+            return deletedRows;
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Failed to clear Letterboxd direct film check markers.");
+            return 0;
         }
         finally
         {
