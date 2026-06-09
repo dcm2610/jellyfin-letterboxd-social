@@ -38,6 +38,10 @@ public sealed class LetterboxdScraper
         @"<a\b(?=[^>]*\b(?:review-micro|icon-review)\b)(?=[^>]*\bhref\s*=\s*[""'](?<path>[^""'#?]+)[""'])[^>]*>",
         RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
+    private static readonly Regex OlderFilmsPageRegex = new(
+        @"href\s*=\s*[""'][^""']*/films/page/\d+/?[""']",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex JsonLdScriptRegex = new(
         @"<script\b(?=[^>]*\btype\s*=\s*[""']application/ld\+json[""'])[^>]*>(?<json>.*?)</script>",
         RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
@@ -220,13 +224,27 @@ public sealed class LetterboxdScraper
 
             checkedUsers++;
             var displayName = string.IsNullOrWhiteSpace(mapping.DisplayName) ? username : mapping.DisplayName.Trim();
-            var userFilmPage = await FetchUserFilmPageDataAsync(username, slug, requestDelay, cancellationToken).ConfigureAwait(false);
-            if (userFilmPage is null)
+            var userFilmLookup = await FetchUserFilmPageDataAsync(username, slug, requestDelay, cancellationToken).ConfigureAwait(false);
+            if (userFilmLookup.Status != UserFilmLookupStatus.Found)
             {
-                await _cacheStore.SaveUserFilmCheckAsync(username, slug, false, cancellationToken).ConfigureAwait(false);
+                userFilmLookup = await FetchUserFilmGridEntryAsync(username, slug, requestDelay, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (userFilmLookup.Status != UserFilmLookupStatus.Found || userFilmLookup.PageData is null)
+            {
+                if (userFilmLookup.Status == UserFilmLookupStatus.NotFound)
+                {
+                    await _cacheStore.SaveUserFilmCheckAsync(username, slug, false, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    _logger.Debug("On-demand direct check for " + username + " and " + slug + " was inconclusive, so no miss marker was saved.");
+                }
+
                 continue;
             }
 
+            var userFilmPage = userFilmLookup.PageData;
             var avatarUrl = await FetchProfileImageUrlAsync(username, requestDelay, cancellationToken).ConfigureAwait(false);
             var records = BuildLookupIds(externalIds, slug)
                 .Select(lookupId => new CachedReviewRecord
@@ -538,7 +556,7 @@ public sealed class LetterboxdScraper
             IsSpoilerReviewPage(html));
     }
 
-    private async Task<UserFilmPageData?> FetchUserFilmPageDataAsync(
+    private async Task<UserFilmLookupResult> FetchUserFilmPageDataAsync(
         string username,
         string slug,
         TimeSpan requestDelay,
@@ -549,13 +567,63 @@ public sealed class LetterboxdScraper
         var html = await GetStringWithLoggingAsync(relativePath, requestDelay, cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(html))
         {
-            return null;
+            _logger.Debug("Direct Letterboxd user film page was not readable for " + username + " and " + slug + ".");
+            return UserFilmLookupResult.Inconclusive();
         }
 
-        return new UserFilmPageData(
+        return UserFilmLookupResult.Found(new UserFilmPageData(
             ExtractReviewTextFromReviewPage(html),
             IsSpoilerReviewPage(html),
-            ExtractJsonLdRatingValue(html));
+            ExtractJsonLdRatingValue(html)));
+    }
+
+    private async Task<UserFilmLookupResult> FetchUserFilmGridEntryAsync(
+        string username,
+        string slug,
+        TimeSpan requestDelay,
+        CancellationToken cancellationToken)
+    {
+        var filmsPath = $"{Uri.EscapeDataString(username)}/films/";
+        _logger.Debug("Searching readable Letterboxd films grid for " + username + " and slug " + slug + ".");
+        var html = await GetStringWithLoggingAsync(filmsPath, requestDelay, cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return UserFilmLookupResult.Inconclusive();
+        }
+
+        var entry = ParseFilmEntries(html, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
+            .FirstOrDefault(item => string.Equals(item.LetterboxdSlug, slug, StringComparison.OrdinalIgnoreCase));
+        if (entry is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.ReviewPath))
+            {
+                var reviewPage = await FetchReviewPageAsync(entry.ReviewPath, requestDelay, cancellationToken).ConfigureAwait(false);
+                if (reviewPage is not null)
+                {
+                    if (IsUsefulReviewText(reviewPage.ReviewText))
+                    {
+                        entry.ReviewText = reviewPage.ReviewText;
+                    }
+
+                    entry.ContainsSpoilers = reviewPage.ContainsSpoilers;
+                }
+            }
+
+            _logger.Debug("Found " + slug + " on readable films grid for " + username + ".");
+            return UserFilmLookupResult.Found(new UserFilmPageData(
+                entry.ReviewText,
+                entry.ContainsSpoilers,
+                entry.RatingValue));
+        }
+
+        if (HasOlderFilmsPage(html))
+        {
+            _logger.Debug("Did not find " + slug + " on the first readable films grid for " + username + ", but older films pages exist and may be blocked.");
+            return UserFilmLookupResult.Inconclusive();
+        }
+
+        _logger.Debug("Did not find " + slug + " on a fully readable films grid for " + username + ".");
+        return UserFilmLookupResult.NotFound();
     }
 
     private async Task<string?> GetStringWithLoggingAsync(
@@ -1097,6 +1165,11 @@ public sealed class LetterboxdScraper
         return html.Contains("This review may contain spoilers.", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool HasOlderFilmsPage(string html)
+    {
+        return !string.IsNullOrWhiteSpace(html) && OlderFilmsPageRegex.IsMatch(html);
+    }
+
     private static string? ExtractReviewTextFromRssDescription(string description)
     {
         if (string.IsNullOrWhiteSpace(description))
@@ -1183,4 +1256,29 @@ public sealed class LetterboxdScraper
     private sealed record ReviewPageData(string? ReviewText, bool ContainsSpoilers);
 
     private sealed record UserFilmPageData(string? ReviewText, bool ContainsSpoilers, double? RatingValue);
+
+    private enum UserFilmLookupStatus
+    {
+        Found,
+        NotFound,
+        Inconclusive
+    }
+
+    private sealed record UserFilmLookupResult(UserFilmLookupStatus Status, UserFilmPageData? PageData)
+    {
+        public static UserFilmLookupResult Found(UserFilmPageData pageData)
+        {
+            return new UserFilmLookupResult(UserFilmLookupStatus.Found, pageData);
+        }
+
+        public static UserFilmLookupResult NotFound()
+        {
+            return new UserFilmLookupResult(UserFilmLookupStatus.NotFound, null);
+        }
+
+        public static UserFilmLookupResult Inconclusive()
+        {
+            return new UserFilmLookupResult(UserFilmLookupStatus.Inconclusive, null);
+        }
+    }
 }
