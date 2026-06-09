@@ -515,7 +515,6 @@
     }
 
     async function renderForCurrentPage() {
-        const sequence = ++renderSequence;
         if (!isMovieDetailPage()) {
             lastRenderKey = '';
             return;
@@ -539,6 +538,7 @@
             return;
         }
 
+        const sequence = ++renderSequence;
         lastRenderKey = renderKey;
 
         try {
@@ -586,8 +586,13 @@
     window.addEventListener('hashchange', scheduleRenderWithRetries);
     window.addEventListener('popstate', scheduleRenderWithRetries);
 
-    const observer = new MutationObserver(function () {
-        if (getActiveDetailPage()) {
+    const observer = new MutationObserver(function (mutations) {
+        const onlyWidgetMutations = mutations.every(function (mutation) {
+            const target = mutation.target && mutation.target.nodeType === 1 ? mutation.target : null;
+            return target && target.closest && target.closest('.' + widgetClass);
+        });
+
+        if (!onlyWidgetMutations && getActiveDetailPage()) {
             scheduleRender();
         }
     });

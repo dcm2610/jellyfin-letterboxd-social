@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Reflection;
 using System.Text;
 using Jellyfin.Plugin.LetterboxdSocial.Services;
 using Microsoft.AspNetCore.Http;
@@ -74,7 +75,13 @@ public sealed class FrontendInjectionMiddleware
                 return;
             }
 
-            var scriptPath = context.Request.PathBase.Add("/ScheduledLetterboxd/FrontendInjection.js").ToString();
+            var scriptVersion = Uri.EscapeDataString(
+                typeof(FrontendInjectionMiddleware).Assembly
+                    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                    .InformationalVersion
+                ?? typeof(FrontendInjectionMiddleware).Assembly.GetName().Version?.ToString()
+                ?? "1");
+            var scriptPath = context.Request.PathBase.Add("/ScheduledLetterboxd/FrontendInjection.js").ToString() + "?v=" + scriptVersion;
             var scriptTag = $"<script defer src=\"{scriptPath}\" {Marker}=\"true\"></script>";
             var injectedHtml = html.Contains("</body>", StringComparison.OrdinalIgnoreCase)
                 ? ReplaceLastBodyClose(html, scriptTag)

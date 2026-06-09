@@ -1,7 +1,7 @@
 ---
 name: "Letterboxd Social"
 guid: "449b09f6-a9b5-4cf0-ba7d-433c11e9c0ad"
-version: "1.0.0.33"
+version: "1.0.0.34"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 owner: "Jellyfin.Plugin.LetterboxdSocial"
@@ -13,4 +13,4 @@ category: "Metadata"
 artifacts:
   - "Jellyfin.Plugin.LetterboxdSocial.dll"
 changelog: >
-  Make cached review rendering more robust and time out slow background searches so the widget cannot get stuck loading.
+  Fix the widget loading loop caused by self-triggered DOM renders and add a versioned frontend script cachebuster.

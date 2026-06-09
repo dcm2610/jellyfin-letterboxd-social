@@ -8,11 +8,11 @@
     "category": "Metadata",
     "versions": [
       {
-        "version": "1.0.0.33",
-        "changelog": "Make cached review rendering more robust and time out slow background searches so the widget cannot get stuck loading.",
+        "version": "1.0.0.34",
+        "changelog": "Fix the widget loading loop caused by self-triggered DOM renders and add a versioned frontend script cachebuster.",
         "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.33/LetterboxdSocial_1.0.0.33.zip",
-        "checksum": "3E9F2A0FF58204FB2FE143EA96AACFE2",
+        "sourceUrl": "https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.34/LetterboxdSocial_1.0.0.34.zip",
+        "checksum": "14C20D1E2EC62737F9BB2A5AEA758C9D",
         "timestamp": "2026-06-09T00:00:00Z"
       }
     ]
