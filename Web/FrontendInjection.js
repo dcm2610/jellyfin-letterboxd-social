@@ -5,6 +5,7 @@
     const styleId = 'letterboxd-social-widget-styles';
     const renderDelay = 250;
     const retryDelays = [650, 1400, 2600];
+    const topUpTimeout = 15000;
     let lastRenderKey = '';
     let renderTimer = 0;
     let renderSequence = 0;
@@ -134,11 +135,11 @@
         const url = getApiUrl(movieId, cachedOnly);
 
         if (window.ApiClient && typeof window.ApiClient.ajax === 'function') {
-            return await window.ApiClient.ajax({
+            return normalizeReviews(await window.ApiClient.ajax({
                 type: 'GET',
                 url,
                 dataType: 'json'
-            });
+            }));
         }
 
         const headers = {};
@@ -159,7 +160,48 @@
             return [];
         }
 
-        return await response.json();
+        return normalizeReviews(await response.json());
+    }
+
+    function normalizeReviews(value) {
+        if (Array.isArray(value)) {
+            return value;
+        }
+
+        if (typeof value === 'string') {
+            try {
+                return normalizeReviews(JSON.parse(value));
+            } catch {
+                return [];
+            }
+        }
+
+        if (value && Array.isArray(value.Items)) {
+            return value.Items;
+        }
+
+        if (value && Array.isArray(value.items)) {
+            return value.items;
+        }
+
+        if (value && Array.isArray(value.value)) {
+            return value.value;
+        }
+
+        return [];
+    }
+
+    function withTimeout(promise, timeoutMilliseconds) {
+        let timeoutId = 0;
+        const timeoutPromise = new Promise(function (_, reject) {
+            timeoutId = window.setTimeout(function () {
+                reject(new Error('Timed out waiting for Letterboxd review search.'));
+            }, timeoutMilliseconds);
+        });
+
+        return Promise.race([promise, timeoutPromise]).finally(function () {
+            window.clearTimeout(timeoutId);
+        });
     }
 
     function getValue(source, camelName, pascalName) {
@@ -355,7 +397,8 @@
         const wrapper = shell.wrapper;
         const list = shell.list;
 
-        if (!Array.isArray(reviews) || reviews.length === 0) {
+        const normalizedReviews = normalizeReviews(reviews);
+        if (normalizedReviews.length === 0) {
             if (isSearching) {
                 appendLoadingRow(list, 'Searching Letterboxd for friend ratings and reviews...');
                 placeWidget(page, wrapper);
@@ -370,13 +413,13 @@
             return;
         }
 
-        reviews.forEach(function (review) {
+        normalizedReviews.forEach(function (review) {
             const card = document.createElement('article');
             card.className = 'letterboxd-user-card';
             const displayName = getValue(review, 'displayName', 'DisplayName');
             const username = getValue(review, 'username', 'Username');
             const avatarUrl = getValue(review, 'avatarUrl', 'AvatarUrl');
-            const starRating = getValue(review, 'starRating', 'StarRating') || '';
+            const starRating = String(getValue(review, 'starRating', 'StarRating') || '');
             const reviewText = getValue(review, 'reviewText', 'ReviewText');
             const containsSpoilers = getValue(review, 'containsSpoilers', 'ContainsSpoilers') === true;
             const starText = createStarText(review);
@@ -437,10 +480,11 @@
                 spoilerWarning = warning;
             }
 
-            if (reviewText && reviewText.trim()) {
+            const reviewTextValue = reviewText === null || reviewText === undefined ? '' : String(reviewText).trim();
+            if (reviewTextValue) {
                 const quote = document.createElement('blockquote');
                 quote.className = 'letterboxd-user-review';
-                quote.textContent = reviewText.trim();
+                quote.textContent = reviewTextValue;
 
                 if (containsSpoilers) {
                     quote.hidden = true;
@@ -506,7 +550,13 @@
 
             renderReviews(page, cachedReviews, true);
 
-            const reviews = await fetchReviews(lookupId, false);
+            let reviews = cachedReviews;
+            try {
+                reviews = await withTimeout(fetchReviews(lookupId, false), topUpTimeout);
+            } catch (topUpError) {
+                console.warn('Letterboxd Social: timed out while searching for additional reviews.', topUpError);
+            }
+
             if (sequence !== renderSequence) {
                 return;
             }

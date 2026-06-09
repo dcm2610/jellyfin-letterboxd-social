@@ -19,10 +19,10 @@ The repo root contains `manifest.json` for Jellyfin's plugin repository URL.
 The manifest points at the release asset URL:
 
 ```text
-https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.32/LetterboxdSocial_1.0.0.32.zip
+https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.33/LetterboxdSocial_1.0.0.33.zip
 ```
 
-Upload `dist/LetterboxdSocial_1.0.0.32.zip` as that release asset. Jellyfin can use the raw GitHub URL for `manifest.json` as a permanent update manifest.
+Upload `dist/LetterboxdSocial_1.0.0.33.zip` as that release asset. Jellyfin can use the raw GitHub URL for `manifest.json` as a permanent update manifest.
 
 ## Configure
 
