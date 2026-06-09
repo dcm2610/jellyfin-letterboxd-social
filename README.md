@@ -5,8 +5,6 @@
 
 A Jellyfin server plugin that brings your Letterboxd social feed into your media library. When you open a movie in Jellyfin, the plugin shows a **Letterboxd Friends** widget on the detail page — displaying ratings, watched status, and reviews from the Letterboxd accounts you configure.
 
-![Widget showing friend ratings and reviews on a Jellyfin movie detail page]()
-
 ---
 
 ## What It Does
@@ -88,11 +86,3 @@ Letterboxd imposes anti-scraping measures on paginated film pages. The plugin us
 ```
 
 Copy `dist\LetterboxdSocial\` into your Jellyfin plugins directory and restart.
-
-## Creating a Release
-
-```powershell
-.\release.ps1 -Version 1.0.0.X -Changelog "Your release note here."
-```
-
-The script bumps all version fields, builds, packages, updates the manifest, commits, pushes, and creates the GitHub release in one shot. Requires `gh` (GitHub CLI) to be authenticated.
