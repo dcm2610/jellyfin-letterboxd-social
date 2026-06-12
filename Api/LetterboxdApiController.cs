@@ -17,7 +17,6 @@ public sealed class LetterboxdApiController : ControllerBase
 {
     private const string FrontendResourceName = "Jellyfin.Plugin.LetterboxdSocial.Web.FrontendInjection.js";
     private readonly LetterboxdCacheStore _cacheStore;
-    private readonly LetterboxdScraper _scraper;
     private readonly ILibraryManager _libraryManager;
     private readonly LetterboxdSocialFileLogger _logger;
 
@@ -25,17 +24,14 @@ public sealed class LetterboxdApiController : ControllerBase
     /// Initializes a new instance of the <see cref="LetterboxdApiController"/> class.
     /// </summary>
     /// <param name="cacheStore">Cache store.</param>
-    /// <param name="scraper">Letterboxd scraper.</param>
     /// <param name="libraryManager">Library manager.</param>
     /// <param name="logger">File logger.</param>
     public LetterboxdApiController(
         LetterboxdCacheStore cacheStore,
-        LetterboxdScraper scraper,
         ILibraryManager libraryManager,
         LetterboxdSocialFileLogger logger)
     {
         _cacheStore = cacheStore;
-        _scraper = scraper;
         _libraryManager = libraryManager;
         _logger = logger;
     }
@@ -44,7 +40,7 @@ public sealed class LetterboxdApiController : ControllerBase
     /// Gets cached Letterboxd friend ratings/reviews for a movie.
     /// </summary>
     /// <param name="movieId">TMDB id, IMDb id, Letterboxd slug, or Jellyfin internal item id.</param>
-    /// <param name="cachedOnly">Whether to return only existing cache rows without running on-demand checks.</param>
+    /// <param name="cachedOnly">Ignored. Retained so older cached frontend scripts keep working.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Friend ratings/reviews.</returns>
     [Authorize]
@@ -57,66 +53,26 @@ public sealed class LetterboxdApiController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(movieId))
         {
-            _logger.Debug("Reviews API called without a movieId. Returning an empty array.");
             return Ok(Array.Empty<LetterboxdReviewResponse>());
         }
 
         try
         {
-            _logger.Debug("Reviews API called for movieId=" + movieId + ".");
-            var lookupIds = ResolveLookupIds(movieId, out var item);
+            var lookupIds = ResolveLookupIds(movieId);
             var reviews = await _cacheStore.GetReviewsAsync(lookupIds, cancellationToken).ConfigureAwait(false);
-            if (cachedOnly)
+
+            var configuration = Plugin.Instance?.Configuration;
+            if (configuration is not null)
             {
-                _logger.Debug("Reviews API returning " + reviews.Count + " cached-only review(s) for movieId=" + movieId + ".");
-                return Ok(reviews);
+                var configuredUsernames = configuration.UserMappings
+                    .Where(static mapping => !string.IsNullOrWhiteSpace(mapping.LetterboxdUsername))
+                    .Select(static mapping => mapping.LetterboxdUsername.Trim())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                reviews = reviews
+                    .Where(review => configuredUsernames.Contains(review.Username))
+                    .ToArray();
             }
 
-            var configuration = Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration();
-            var configuredUsernames = configuration.UserMappings
-                .Where(static mapping => !string.IsNullOrWhiteSpace(mapping.LetterboxdUsername))
-                .Select(static mapping => mapping.LetterboxdUsername.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            var cachedUsernames = reviews
-                .Select(static review => review.Username)
-                .Where(static username => !string.IsNullOrWhiteSpace(username))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            _logger.Debug("On-demand review check state for movieId=" + movieId + ": configuredUsers=" + configuredUsernames.Length + " [" + string.Join(", ", configuredUsernames) + "], cachedUsers=" + cachedUsernames.Length + " [" + string.Join(", ", cachedUsernames) + "].");
-
-            if (ShouldRunOnDemandCheck(reviews, configuredUsernames, item))
-            {
-                var targetUsernames = await GetUncheckedTargetUsernamesAsync(
-                    reviews,
-                    configuredUsernames,
-                    cancellationToken).ConfigureAwait(false);
-                if (targetUsernames is not null && targetUsernames.Count == 0)
-                {
-                    _logger.Debug("On-demand review check skipped because all missing users already have direct check markers.");
-                }
-                else
-                {
-                    var savedRows = await _scraper.ScrapeConfiguredUsersForMovieAsync(
-                        configuration,
-                        item!.Name,
-                        item.ProductionYear,
-                        lookupIds,
-                        targetUsernames,
-                        cancellationToken).ConfigureAwait(false);
-
-                    if (savedRows > 0)
-                    {
-                        reviews = await _cacheStore.GetReviewsAsync(lookupIds, cancellationToken).ConfigureAwait(false);
-                    }
-                }
-            }
-            else
-            {
-                _logger.Debug("On-demand review check skipped because no configured users are missing from the cache or the Jellyfin item could not be resolved.");
-            }
-
-            _logger.Debug("Reviews API returning " + reviews.Count + " review(s) for movieId=" + movieId + ".");
             return Ok(reviews);
         }
         catch (OperationCanceledException)
@@ -128,52 +84,6 @@ public sealed class LetterboxdApiController : ControllerBase
             _logger.Error(ex, "Failed to return Letterboxd Social reviews for movie id " + movieId + ".");
             return Ok(Array.Empty<LetterboxdReviewResponse>());
         }
-    }
-
-    private async Task<IReadOnlyCollection<string>?> GetUncheckedTargetUsernamesAsync(
-        IReadOnlyCollection<LetterboxdReviewResponse> reviews,
-        IReadOnlyCollection<string> configuredUsernames,
-        CancellationToken cancellationToken)
-    {
-        if (reviews.Count == 0)
-        {
-            return null;
-        }
-
-        var cachedUsernames = reviews
-            .Select(static review => review.Username)
-            .Where(static username => !string.IsNullOrWhiteSpace(username))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var slug = reviews
-            .Select(static review => review.LetterboxdSlug)
-            .FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value));
-        var checkedUsernames = string.IsNullOrWhiteSpace(slug)
-            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            : await _cacheStore.GetCheckedUsernamesForFilmAsync(slug, cancellationToken).ConfigureAwait(false);
-
-        var targetUsernames = configuredUsernames
-            .Where(username => !cachedUsernames.Contains(username) && !checkedUsernames.Contains(username))
-            .ToArray();
-        _logger.Debug("On-demand review check targets for slug " + (slug ?? "(unknown)") + ": cachedUsers=[" + string.Join(", ", cachedUsernames) + "], checkedUsers=[" + string.Join(", ", checkedUsernames) + "], targetUsers=[" + string.Join(", ", targetUsernames) + "].");
-        return targetUsernames;
-    }
-
-    private static bool ShouldRunOnDemandCheck(
-        IReadOnlyCollection<LetterboxdReviewResponse> reviews,
-        IReadOnlyCollection<string> configuredUsernames,
-        BaseItem? item)
-    {
-        if (item is null || string.IsNullOrWhiteSpace(item.Name) || configuredUsernames.Count == 0)
-        {
-            return false;
-        }
-
-        var cachedUsernames = reviews
-            .Select(static review => review.Username)
-            .Where(static username => !string.IsNullOrWhiteSpace(username))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-        return cachedUsernames < configuredUsernames.Count;
     }
 
     /// <summary>
@@ -195,7 +105,6 @@ public sealed class LetterboxdApiController : ControllerBase
                 return NotFound();
             }
 
-            _logger.Debug("Serving embedded frontend injection script.");
             using var reader = new StreamReader(stream);
             return Content(reader.ReadToEnd(), "application/javascript");
         }
@@ -206,30 +115,25 @@ public sealed class LetterboxdApiController : ControllerBase
         }
     }
 
-    private IReadOnlyCollection<string> ResolveLookupIds(string movieId, out BaseItem? resolvedItem)
+    private IReadOnlyCollection<string> ResolveLookupIds(string movieId)
     {
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var normalizedInput = movieId.Trim();
-        resolvedItem = null;
-
-        AddLookupVariants(ids, normalizedInput);
+        ids.Add(normalizedInput);
 
         try
         {
             if (Guid.TryParse(normalizedInput, out var guid))
             {
                 var item = _libraryManager.GetItemById(guid);
-                resolvedItem = item;
                 AddProviderIds(ids, item);
-                _logger.Debug("Resolved Jellyfin item " + movieId + " to lookup ids: " + string.Join(", ", ids) + ".");
             }
         }
         catch (Exception ex)
         {
-            _logger.Debug("Unable to resolve Jellyfin provider ids for " + movieId + ". " + ex.GetType().Name + ": " + ex.Message);
+            _logger.Warning("Unable to resolve Jellyfin provider ids for " + movieId + ". " + ex.GetType().Name + ": " + ex.Message);
         }
 
-        _logger.Debug("Final lookup ids for " + movieId + ": " + string.Join(", ", ids) + ".");
         return ids;
     }
 
@@ -250,45 +154,12 @@ public sealed class LetterboxdApiController : ControllerBase
             if (string.Equals(providerId.Key, "Tmdb", StringComparison.OrdinalIgnoreCase))
             {
                 ids.Add("tmdb:" + providerId.Value.Trim());
-                ids.Add(providerId.Value.Trim());
             }
             else if (string.Equals(providerId.Key, "Imdb", StringComparison.OrdinalIgnoreCase))
             {
                 ids.Add("imdb:" + providerId.Value.Trim());
-                ids.Add(providerId.Value.Trim());
             }
         }
     }
 
-    private static void AddLookupVariants(ISet<string> ids, string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return;
-        }
-
-        var trimmed = value.Trim();
-        ids.Add(trimmed);
-
-        if (trimmed.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("imdb:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("letterboxd:", StringComparison.OrdinalIgnoreCase))
-        {
-            ids.Add(trimmed[(trimmed.IndexOf(':', StringComparison.Ordinal) + 1)..]);
-            return;
-        }
-
-        if (trimmed.StartsWith("tt", StringComparison.OrdinalIgnoreCase))
-        {
-            ids.Add("imdb:" + trimmed);
-        }
-        else if (trimmed.All(char.IsDigit))
-        {
-            ids.Add("tmdb:" + trimmed);
-        }
-        else
-        {
-            ids.Add("letterboxd:" + trimmed);
-        }
-    }
 }

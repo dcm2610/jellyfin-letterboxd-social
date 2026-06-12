@@ -1,4 +1,3 @@
-using System.IO.Compression;
 using System.Reflection;
 using System.Text;
 using Jellyfin.Plugin.LetterboxdSocial.Services;
@@ -7,7 +6,7 @@ using Microsoft.AspNetCore.Http;
 namespace Jellyfin.Plugin.LetterboxdSocial.Middleware;
 
 /// <summary>
-/// Injects the Letterboxd Social frontend script into Jellyfin Web HTML responses.
+/// Injects the Letterboxd Social frontend script into the Jellyfin Web index page.
 /// </summary>
 public sealed class FrontendInjectionMiddleware
 {
@@ -39,7 +38,10 @@ public sealed class FrontendInjectionMiddleware
             return;
         }
 
-        _logger.Debug("Inspecting Jellyfin Web HTML response for " + context.Request.Path + ".");
+        // Ask downstream for an uncompressed response so the HTML can be edited
+        // without any gzip/brotli decode/re-encode round trip.
+        context.Request.Headers.Remove("Accept-Encoding");
+
         var originalBody = context.Response.Body;
         await using var buffer = new MemoryStream();
         context.Response.Body = buffer;
@@ -48,30 +50,17 @@ public sealed class FrontendInjectionMiddleware
         {
             await _next(context).ConfigureAwait(false);
 
+            var originalBytes = buffer.ToArray();
             if (!ShouldInject(context.Response))
             {
-                _logger.Debug("Skipping frontend injection for " + context.Request.Path + ". Status=" + context.Response.StatusCode + ", ContentType=" + (context.Response.ContentType ?? "(none)") + ".");
-                buffer.Position = 0;
-                await buffer.CopyToAsync(originalBody, context.RequestAborted).ConfigureAwait(false);
-                return;
-            }
-
-            var encoding = GetContentEncoding(context.Response);
-            var originalBytes = buffer.ToArray();
-            var html = await ReadResponseHtmlAsync(originalBytes, encoding, context.RequestAborted).ConfigureAwait(false);
-            if (html is null)
-            {
-                _logger.Warning("Skipping frontend injection because response encoding could not be decoded. Encoding=" + (encoding ?? "(none)") + ".");
                 await WriteBytesAsync(originalBody, originalBytes, context.RequestAborted).ConfigureAwait(false);
                 return;
             }
 
+            var html = Encoding.UTF8.GetString(originalBytes);
             if (html.Contains(Marker, StringComparison.OrdinalIgnoreCase))
             {
-                _logger.Debug("Frontend injection marker already present for " + context.Request.Path + ".");
-                var existingBytes = await EncodeResponseHtmlAsync(html, encoding, context.RequestAborted).ConfigureAwait(false);
-                context.Response.ContentLength = existingBytes.Length;
-                await WriteBytesAsync(originalBody, existingBytes, context.RequestAborted).ConfigureAwait(false);
+                await WriteBytesAsync(originalBody, originalBytes, context.RequestAborted).ConfigureAwait(false);
                 return;
             }
 
@@ -83,15 +72,11 @@ public sealed class FrontendInjectionMiddleware
                 ?? "1");
             var scriptPath = context.Request.PathBase.Add("/ScheduledLetterboxd/FrontendInjection.js").ToString() + "?v=" + scriptVersion;
             var scriptTag = $"<script defer src=\"{scriptPath}\" {Marker}=\"true\"></script>";
-            var injectedHtml = html.Contains("</body>", StringComparison.OrdinalIgnoreCase)
-                ? ReplaceLastBodyClose(html, scriptTag)
-                : html + scriptTag;
+            var injectedBytes = Encoding.UTF8.GetBytes(InjectBeforeBodyClose(html, scriptTag));
 
-            var injectedBytes = await EncodeResponseHtmlAsync(injectedHtml, encoding, context.RequestAborted).ConfigureAwait(false);
             context.Response.Headers.Remove("ETag");
             context.Response.ContentLength = injectedBytes.Length;
             await WriteBytesAsync(originalBody, injectedBytes, context.RequestAborted).ConfigureAwait(false);
-            _logger.Debug("Injected Letterboxd Social frontend script into " + context.Request.Path + ". Encoding=" + (encoding ?? "(none)") + ".");
         }
         catch (OperationCanceledException)
         {
@@ -99,7 +84,7 @@ public sealed class FrontendInjectionMiddleware
         }
         catch (Exception ex)
         {
-            _logger.Warning(ex, "Failed to inject Letterboxd Social frontend script.");
+            _logger.Error(ex, "Failed to inject Letterboxd Social frontend script.");
             buffer.Position = 0;
             await buffer.CopyToAsync(originalBody, context.RequestAborted).ConfigureAwait(false);
         }
@@ -117,116 +102,20 @@ public sealed class FrontendInjectionMiddleware
         }
 
         var path = request.Path.Value ?? string.Empty;
-        return path.EndsWith("/", StringComparison.OrdinalIgnoreCase)
+        return string.Equals(path, "/", StringComparison.Ordinal)
                || path.EndsWith("/web", StringComparison.OrdinalIgnoreCase)
                || path.EndsWith("/web/", StringComparison.OrdinalIgnoreCase)
-               || path.EndsWith("/web/index.html", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(path, "/", StringComparison.Ordinal);
+               || path.EndsWith("/web/index.html", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ShouldInject(HttpResponse response)
     {
         return response.StatusCode == StatusCodes.Status200OK
-               && response.ContentType?.Contains("text/html", StringComparison.OrdinalIgnoreCase) == true;
+               && response.ContentType?.Contains("text/html", StringComparison.OrdinalIgnoreCase) == true
+               && string.IsNullOrEmpty(response.Headers.ContentEncoding.ToString());
     }
 
-    private static string? GetContentEncoding(HttpResponse response)
-    {
-        var value = response.Headers["Content-Encoding"].ToString();
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        return value.Split(',')[0].Trim().ToLowerInvariant();
-    }
-
-    private static async Task<string?> ReadResponseHtmlAsync(
-        byte[] bytes,
-        string? encoding,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            await using var source = new MemoryStream(bytes);
-            await using var decoded = new MemoryStream();
-
-            if (string.Equals(encoding, "gzip", StringComparison.OrdinalIgnoreCase))
-            {
-                await using var gzip = new GZipStream(source, CompressionMode.Decompress, leaveOpen: false);
-                await gzip.CopyToAsync(decoded, cancellationToken).ConfigureAwait(false);
-            }
-            else if (string.Equals(encoding, "br", StringComparison.OrdinalIgnoreCase))
-            {
-                await using var brotli = new BrotliStream(source, CompressionMode.Decompress, leaveOpen: false);
-                await brotli.CopyToAsync(decoded, cancellationToken).ConfigureAwait(false);
-            }
-            else if (string.Equals(encoding, "deflate", StringComparison.OrdinalIgnoreCase))
-            {
-                await using var deflate = new DeflateStream(source, CompressionMode.Decompress, leaveOpen: false);
-                await deflate.CopyToAsync(decoded, cancellationToken).ConfigureAwait(false);
-            }
-            else if (encoding is null)
-            {
-                decoded.Write(bytes, 0, bytes.Length);
-            }
-            else
-            {
-                return null;
-            }
-
-            return Encoding.UTF8.GetString(decoded.ToArray());
-        }
-        catch (InvalidDataException)
-        {
-            return null;
-        }
-    }
-
-    private static async Task<byte[]> EncodeResponseHtmlAsync(
-        string html,
-        string? encoding,
-        CancellationToken cancellationToken)
-    {
-        var bytes = Encoding.UTF8.GetBytes(html);
-
-        if (encoding is null)
-        {
-            return bytes;
-        }
-
-        await using var output = new MemoryStream();
-
-        if (string.Equals(encoding, "gzip", StringComparison.OrdinalIgnoreCase))
-        {
-            await using (var gzip = new GZipStream(output, CompressionLevel.Fastest, leaveOpen: true))
-            {
-                await gzip.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-            }
-        }
-        else if (string.Equals(encoding, "br", StringComparison.OrdinalIgnoreCase))
-        {
-            await using (var brotli = new BrotliStream(output, CompressionLevel.Fastest, leaveOpen: true))
-            {
-                await brotli.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-            }
-        }
-        else if (string.Equals(encoding, "deflate", StringComparison.OrdinalIgnoreCase))
-        {
-            await using (var deflate = new DeflateStream(output, CompressionLevel.Fastest, leaveOpen: true))
-            {
-                await deflate.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-            }
-        }
-        else
-        {
-            return bytes;
-        }
-
-        return output.ToArray();
-    }
-
-    private static string ReplaceLastBodyClose(string html, string scriptTag)
+    private static string InjectBeforeBodyClose(string html, string scriptTag)
     {
         var index = html.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
         return index < 0

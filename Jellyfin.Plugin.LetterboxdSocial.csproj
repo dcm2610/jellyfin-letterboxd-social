@@ -19,8 +19,6 @@
     <PackageReference Include="Jellyfin.Model" Version="10.11.10">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.6" />
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.10" />
   </ItemGroup>
 
   <ItemGroup>
@@ -30,10 +28,4 @@
     <None Include="meta.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <Target Name="RemoveNativeDllsThatJellyfinScansAsAssemblies" AfterTargets="Publish">
-    <ItemGroup>
-      <NativeDllsUnderRuntimes Include="$(PublishDir)runtimes\**\*.dll" />
-    </ItemGroup>
-    <Delete Files="@(NativeDllsUnderRuntimes)" />
-  </Target>
 </Project>

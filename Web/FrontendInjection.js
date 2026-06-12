@@ -5,12 +5,14 @@
     const styleId = 'letterboxd-social-widget-styles';
     const renderDelay = 250;
     const retryDelays = [650, 1400, 2600];
-    const topUpTimeout = 90000;
 
-    // activeKey: itemId of movie currently being rendered (null = idle)
-    // activeId:  incremented each new render; stale completions bail when theirs no longer matches
-    let activeKey = null;
+    // activeItemId: movie currently in flight or rendered (null = idle)
+    // activeId:     incremented each new render; stale completions bail when theirs no longer matches
+    // lastReviews:  loaded reviews for activeItemId, used to re-place the widget if Jellyfin
+    //               re-renders the page and drops our DOM without a navigation event
+    let activeItemId = null;
     let activeId = 0;
+    let lastReviews = null;
     let renderTimer = 0;
 
     function getActiveDetailPage() {
@@ -114,28 +116,18 @@
         return null;
     }
 
-    function getLookupId(item, itemId) {
-        if (itemId) {
-            return itemId;
-        }
-
-        const providerIds = item && item.ProviderIds ? item.ProviderIds : {};
-        return providerIds.Tmdb || providerIds.TMDB || providerIds.Imdb || providerIds.IMDB || itemId;
-    }
-
-    function getApiUrl(movieId, cachedOnly) {
+    function getApiUrl(movieId) {
         if (window.ApiClient && typeof window.ApiClient.getUrl === 'function') {
-            return window.ApiClient.getUrl('ScheduledLetterboxd/Reviews', { movieId, cachedOnly: cachedOnly === true });
+            return window.ApiClient.getUrl('ScheduledLetterboxd/Reviews', { movieId });
         }
 
         const base = document.querySelector('base[href]');
         const prefix = base ? base.getAttribute('href').replace(/\/$/, '') : '';
-        return prefix + '/ScheduledLetterboxd/Reviews?movieId=' + encodeURIComponent(movieId)
-            + (cachedOnly === true ? '&cachedOnly=true' : '');
+        return prefix + '/ScheduledLetterboxd/Reviews?movieId=' + encodeURIComponent(movieId);
     }
 
-    async function fetchReviews(movieId, cachedOnly) {
-        const url = getApiUrl(movieId, cachedOnly);
+    async function fetchReviews(movieId) {
+        const url = getApiUrl(movieId);
 
         if (window.ApiClient && typeof window.ApiClient.ajax === 'function') {
             return normalizeReviews(await window.ApiClient.ajax({
@@ -145,30 +137,6 @@
             }));
         }
 
-        const headers = {};
-        const token = window.ApiClient && typeof window.ApiClient.accessToken === 'function'
-            ? window.ApiClient.accessToken()
-            : null;
-
-        if (token) {
-            headers['X-Emby-Token'] = token;
-        }
-
-        const response = await fetch(url, {
-            credentials: 'same-origin',
-            headers
-        });
-
-        if (!response.ok) {
-            return [];
-        }
-
-        return normalizeReviews(await response.json());
-    }
-
-    // Always uses native fetch so ApiClient's internal timeout cannot cut the on-demand search short.
-    async function fetchOnDemand(movieId) {
-        const url = getApiUrl(movieId, false);
         const headers = {};
         const token = window.ApiClient && typeof window.ApiClient.accessToken === 'function'
             ? window.ApiClient.accessToken()
@@ -216,19 +184,6 @@
         }
 
         return [];
-    }
-
-    function withTimeout(promise, timeoutMilliseconds) {
-        let timeoutId = 0;
-        const timeoutPromise = new Promise(function (_, reject) {
-            timeoutId = window.setTimeout(function () {
-                reject(new Error('Timed out waiting for Letterboxd review search.'));
-            }, timeoutMilliseconds);
-        });
-
-        return Promise.race([promise, timeoutPromise]).finally(function () {
-            window.clearTimeout(timeoutId);
-        });
     }
 
     function getValue(source, camelName, pascalName) {
@@ -357,7 +312,9 @@
         return { wrapper, list };
     }
 
-    function appendLoadingRow(wrapper, textValue) {
+    function renderLoading(page) {
+        const shell = createWidgetShell(page);
+
         const loading = document.createElement('div');
         loading.className = 'letterboxd-loading-state';
         loading.setAttribute('role', 'status');
@@ -369,15 +326,10 @@
         loading.appendChild(spinner);
 
         const text = document.createElement('span');
-        text.textContent = textValue;
+        text.textContent = 'Loading Letterboxd friend ratings and reviews...';
         loading.appendChild(text);
 
-        wrapper.appendChild(loading);
-    }
-
-    function renderLoading(page) {
-        const shell = createWidgetShell(page);
-        appendLoadingRow(shell.wrapper, 'Searching Letterboxd for friend ratings and reviews...');
+        shell.wrapper.appendChild(loading);
         placeWidget(page, shell.wrapper);
     }
 
@@ -419,19 +371,13 @@
         });
     }
 
-    function renderReviews(page, reviews, isSearching) {
+    function renderReviews(page, reviews) {
         const shell = createWidgetShell(page);
         const wrapper = shell.wrapper;
         const list = shell.list;
 
         const normalizedReviews = normalizeReviews(reviews);
         if (normalizedReviews.length === 0) {
-            if (isSearching) {
-                appendLoadingRow(wrapper, 'Searching Letterboxd for friend ratings and reviews...');
-                placeWidget(page, wrapper);
-                return;
-            }
-
             const empty = document.createElement('div');
             empty.className = 'letterboxd-empty-state';
             empty.textContent = 'No configured Letterboxd friend has logged this film yet.';
@@ -534,10 +480,6 @@
             list.appendChild(card);
         });
 
-        if (isSearching) {
-            appendLoadingRow(wrapper, 'Showing cached reviews. Searching for more Letterboxd friends...');
-        }
-
         placeWidget(page, wrapper);
     }
 
@@ -551,11 +493,16 @@
             return;
         }
 
-        // This movie is already being fetched. Re-place widget if Jellyfin removed it; don't restart.
-        if (activeKey === itemId) {
+        // This movie is already in flight or rendered. Re-place the widget if Jellyfin
+        // re-rendered the page and dropped our DOM; never restart the fetch.
+        if (activeItemId === itemId) {
             const livePage = getActiveDetailPage();
             if (livePage && !livePage.querySelector('.' + widgetClass)) {
-                renderLoading(livePage);
+                if (lastReviews) {
+                    renderReviews(livePage, lastReviews);
+                } else {
+                    renderLoading(livePage);
+                }
             }
             return;
         }
@@ -571,55 +518,29 @@
             return;
         }
 
-        const lookupId = getLookupId(item, itemId);
-
-        activeKey = itemId;
+        activeItemId = itemId;
+        lastReviews = null;
         const myId = ++activeId;
 
         try {
-            // Step 1: Show initial loading state while cache fetch is in flight
-            const p0 = getActiveDetailPage();
-            if (!p0) {
-                activeKey = null;
-                return;
-            }
-            renderLoading(p0);
+            renderLoading(page);
 
-            // Step 2: Fetch cached reviews and display them immediately
-            const cached = await fetchReviews(lookupId, true);
+            const reviews = await fetchReviews(itemId);
             if (activeId !== myId) {
                 return;
             }
 
-            const p1 = getActiveDetailPage();
-            if (!p1) {
-                activeKey = null;
-                return;
+            lastReviews = normalizeReviews(reviews);
+            const livePage = getActiveDetailPage();
+            if (livePage) {
+                renderReviews(livePage, lastReviews);
             }
-            renderReviews(p1, cached, true);
-
-            // Step 3: On-demand search — native fetch bypasses ApiClient's internal timeout
-            let fresh = cached;
-            try {
-                fresh = await withTimeout(fetchOnDemand(lookupId), topUpTimeout);
-            } catch (topUpError) {
-                console.warn('Letterboxd Social: on-demand search timed out or failed.', topUpError);
-            }
-
-            if (activeId !== myId) {
-                return;
-            }
-
-            // Step 4: Update widget with final results
-            const p2 = getActiveDetailPage();
-            if (!p2) {
-                activeKey = null;
-                return;
-            }
-            renderReviews(p2, fresh, false);
         } catch (error) {
             console.warn('Letterboxd Social: failed to load reviews.', error);
-            activeKey = null;
+            if (activeId === myId) {
+                activeItemId = null;
+                lastReviews = null;
+            }
         }
     }
 
@@ -629,12 +550,13 @@
     }
 
     function onNavigation() {
-        // Only reset activeKey when the movie actually changed (or page isn't ready yet).
-        // Jellyfin fires viewshow multiple times per page load; resetting unconditionally would
-        // increment activeId mid-search and discard the on-demand result.
+        // Only reset state when the movie actually changed (or page isn't ready yet).
+        // Jellyfin fires viewshow multiple times per page load; resetting unconditionally
+        // would increment activeId mid-fetch and discard the result.
         const currentId = getCurrentItemId();
-        if (!currentId || activeKey !== currentId) {
-            activeKey = null;
+        if (!currentId || activeItemId !== currentId) {
+            activeItemId = null;
+            lastReviews = null;
         }
         scheduleRender(renderDelay);
         retryDelays.forEach(function (delay) {
@@ -648,18 +570,21 @@
     window.addEventListener('hashchange', onNavigation);
     window.addEventListener('popstate', onNavigation);
 
-    const observer = new MutationObserver(function (mutations) {
-        const onlyWidgetMutations = mutations.every(function (mutation) {
-            const target = mutation.target && mutation.target.nodeType === 1 ? mutation.target : null;
-            return target && target.closest && target.closest('.' + widgetClass);
-        });
+    // Keep-alive only: if Jellyfin re-renders the detail page and drops the widget while a
+    // movie is active, schedule a cheap re-place. Never reacts while the widget is present,
+    // so our own renders cannot retrigger it.
+    const observer = new MutationObserver(function () {
+        if (activeItemId === null) {
+            return;
+        }
 
-        if (!onlyWidgetMutations && getActiveDetailPage()) {
+        const page = getActiveDetailPage();
+        if (page && !page.querySelector('.' + widgetClass)) {
             scheduleRender(renderDelay);
         }
     });
 
-    observer.observe(document.documentElement, {
+    observer.observe(document.body || document.documentElement, {
         childList: true,
         subtree: true
     });

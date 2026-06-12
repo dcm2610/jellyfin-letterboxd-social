@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Diagnostics;
 using MediaBrowser.Common.Configuration;
 
 namespace Jellyfin.Plugin.LetterboxdSocial.Services;
@@ -22,15 +21,6 @@ public sealed class LetterboxdSocialFileLogger
     {
         _applicationPaths = applicationPaths;
         _logFilePath = CreateLogFilePath();
-    }
-
-    /// <summary>
-    /// Writes a debug log entry.
-    /// </summary>
-    /// <param name="message">Message.</param>
-    public void Debug(string message)
-    {
-        Write("DBG", message, null);
     }
 
     /// <summary>
@@ -96,10 +86,7 @@ public sealed class LetterboxdSocialFileLogger
             ?? Path.Combine(AppContext.BaseDirectory, "letterboxd-social");
 
         Directory.CreateDirectory(logFolder);
-        var startedAt = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
-        var processId = Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture);
-        var loadId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)[..8];
-        return Path.Combine(logFolder, "letterboxd-social-" + startedAt + "Z-p" + processId + "-" + loadId + ".log");
+        return Path.Combine(logFolder, "letterboxd-social.log");
     }
 
     private void Write(string level, string message, Exception? exception)

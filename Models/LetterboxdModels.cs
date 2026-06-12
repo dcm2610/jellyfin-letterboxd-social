@@ -124,11 +124,6 @@ public sealed class FilmExternalIds
 public sealed class CachedReviewRecord
 {
     /// <summary>
-    /// Gets or sets the lookup id used by the API.
-    /// </summary>
-    public string LookupId { get; set; } = string.Empty;
-
-    /// <summary>
     /// Gets or sets the TMDB id.
     /// </summary>
     public string? TmdbId { get; set; }

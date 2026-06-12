@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Net;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -121,8 +120,12 @@ public sealed class LetterboxdScraper
 
         var maxPages = Math.Clamp(configuration.MaxDiaryPagesPerUser, 1, 25);
         var requestDelay = TimeSpan.FromMilliseconds(Math.Clamp(configuration.RequestDelayMilliseconds, 0, 30000));
-        _logger.Info("Starting Letterboxd Social scrape for " + mappings.Length + " configured user(s). Max film pages per user: " + maxPages + ". Request delay: " + requestDelay.TotalMilliseconds.ToString(CultureInfo.InvariantCulture) + "ms.");
+        _logger.Info("Starting Letterboxd scrape for " + mappings.Length + " user(s); up to " + maxPages + " film page(s) each, " + requestDelay.TotalMilliseconds.ToString("0", CultureInfo.InvariantCulture) + "ms between requests.");
         progress.Report(0);
+
+        await _cacheStore.PruneUnconfiguredUsersAsync(
+            mappings.Select(static mapping => mapping.LetterboxdUsername).ToArray(),
+            cancellationToken).ConfigureAwait(false);
 
         for (var userIndex = 0; userIndex < mappings.Length; userIndex++)
         {
@@ -135,17 +138,17 @@ public sealed class LetterboxdScraper
 
             try
             {
-                var records = await ScrapeUserAsync(
+                var result = await ScrapeUserAsync(
                     mapping,
                     maxPages,
                     requestDelay,
                     value => progress.Report(userProgressStart + (userProgressWidth * value)),
                     cancellationToken).ConfigureAwait(false);
 
-                progress.Report(userProgressStart + (userProgressWidth * 0.95d));
                 await _cacheStore.SaveUserReviewsAsync(
                     mapping.LetterboxdUsername.Trim(),
-                    records,
+                    result.Records,
+                    result.ScrapeWasComplete,
                     cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -160,120 +163,10 @@ public sealed class LetterboxdScraper
             progress.Report(((userIndex + 1) / (double)mappings.Length) * 100);
         }
 
-        _logger.Info("Finished Letterboxd Social scrape for all configured users.");
+        _logger.Info("Finished Letterboxd scrape for all configured users.");
     }
 
-    /// <summary>
-    /// Scrapes one movie for all configured users. This is used as an on-demand fallback when paginated films pages are blocked.
-    /// </summary>
-    /// <param name="configuration">Plugin configuration.</param>
-    /// <param name="movieTitle">Movie title from Jellyfin.</param>
-    /// <param name="productionYear">Production year from Jellyfin, when available.</param>
-    /// <param name="lookupIds">Known Jellyfin/TMDB/IMDb lookup ids for validation.</param>
-    /// <param name="targetLetterboxdUsernames">Specific Letterboxd usernames to check, or null to check all configured users.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The number of cache rows saved.</returns>
-    public async Task<int> ScrapeConfiguredUsersForMovieAsync(
-        PluginConfiguration configuration,
-        string movieTitle,
-        int? productionYear,
-        IReadOnlyCollection<string> lookupIds,
-        IReadOnlyCollection<string>? targetLetterboxdUsernames,
-        CancellationToken cancellationToken)
-    {
-        var targetSet = targetLetterboxdUsernames is null
-            ? null
-            : targetLetterboxdUsernames
-                .Where(static username => !string.IsNullOrWhiteSpace(username))
-                .Select(static username => username.Trim())
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var mappings = configuration.UserMappings
-            .Where(static mapping => !string.IsNullOrWhiteSpace(mapping.LetterboxdUsername))
-            .Where(mapping => targetSet is null || targetSet.Contains(mapping.LetterboxdUsername.Trim()))
-            .ToArray();
-
-        if (mappings.Length == 0 || string.IsNullOrWhiteSpace(movieTitle))
-        {
-            return 0;
-        }
-
-        var requestDelay = TimeSpan.FromMilliseconds(Math.Clamp(configuration.RequestDelayMilliseconds, 0, 30000));
-        var maxPages = Math.Clamp(configuration.MaxDiaryPagesPerUser, 1, 25);
-        var slug = await ResolveLetterboxdSlugForMovieAsync(movieTitle, productionYear, lookupIds, requestDelay, cancellationToken)
-            .ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(slug))
-        {
-            _logger.Debug("On-demand scrape could not resolve a Letterboxd slug for " + movieTitle + ".");
-            return 0;
-        }
-
-        var externalIds = await ResolveExternalIdsAsync(slug, requestDelay, cancellationToken).ConfigureAwait(false);
-        var checkedUsernames = await _cacheStore.GetCheckedUsernamesForFilmAsync(slug, cancellationToken).ConfigureAwait(false);
-        var savedRows = 0;
-        var checkedUsers = 0;
-
-        foreach (var mapping in mappings)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var username = mapping.LetterboxdUsername.Trim();
-            if (checkedUsernames.Contains(username))
-            {
-                _logger.Debug("Skipping on-demand direct check for " + username + " and " + slug + " because it has already been checked.");
-                continue;
-            }
-
-            checkedUsers++;
-            var displayName = string.IsNullOrWhiteSpace(mapping.DisplayName) ? username : mapping.DisplayName.Trim();
-            var userFilmLookup = await FetchUserFilmPageDataAsync(username, slug, requestDelay, cancellationToken).ConfigureAwait(false);
-            if (userFilmLookup.Status != UserFilmLookupStatus.Found)
-            {
-                userFilmLookup = await FetchUserFilmGridEntryAsync(username, slug, requestDelay, cancellationToken, maxPages).ConfigureAwait(false);
-            }
-
-            if (userFilmLookup.Status != UserFilmLookupStatus.Found || userFilmLookup.PageData is null)
-            {
-                if (userFilmLookup.Status == UserFilmLookupStatus.NotFound)
-                {
-                    await _cacheStore.SaveUserFilmCheckAsync(username, slug, false, cancellationToken).ConfigureAwait(false);
-                }
-                else
-                {
-                    _logger.Debug("On-demand direct check for " + username + " and " + slug + " was inconclusive, so no miss marker was saved.");
-                }
-
-                continue;
-            }
-
-            var userFilmPage = userFilmLookup.PageData;
-            var avatarUrl = await FetchProfileImageUrlAsync(username, requestDelay, cancellationToken).ConfigureAwait(false);
-            var records = BuildLookupIds(externalIds, slug)
-                .Select(lookupId => new CachedReviewRecord
-                {
-                    LookupId = lookupId,
-                    TmdbId = externalIds.TmdbId,
-                    ImdbId = externalIds.ImdbId,
-                    LetterboxdSlug = slug,
-                    JellyfinUserId = mapping.JellyfinUserId?.Trim() ?? string.Empty,
-                    LetterboxdUsername = username,
-                    DisplayName = displayName,
-                    AvatarUrl = avatarUrl,
-                    StarRating = userFilmPage.RatingValue.HasValue ? FormatRatingText(userFilmPage.RatingValue.Value) : string.Empty,
-                    RatingValue = userFilmPage.RatingValue,
-                    ReviewText = userFilmPage.ReviewText,
-                    ContainsSpoilers = userFilmPage.ContainsSpoilers
-                })
-                .ToArray();
-
-            await _cacheStore.SaveUserFilmReviewsAsync(username, slug, records, cancellationToken).ConfigureAwait(false);
-            savedRows += records.Length;
-        }
-
-        _logger.Info("On-demand scrape for " + movieTitle + " (" + slug + ") checked " + checkedUsers + " user(s) and saved " + savedRows + " cache row(s).");
-        return savedRows;
-    }
-
-    private async Task<IReadOnlyList<CachedReviewRecord>> ScrapeUserAsync(
+    private async Task<UserScrapeResult> ScrapeUserAsync(
         LetterboxdUserMapping mapping,
         int maxPages,
         TimeSpan requestDelay,
@@ -285,7 +178,6 @@ public sealed class LetterboxdScraper
         var records = new List<CachedReviewRecord>();
         var seenSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        _logger.Info("Scraping Letterboxd profile, RSS reviews, and film ratings for " + username + ".");
         reportUserProgress(0.01d);
 
         var avatarUrl = await FetchProfileImageUrlAsync(username, requestDelay, cancellationToken).ConfigureAwait(false);
@@ -295,78 +187,78 @@ public sealed class LetterboxdScraper
         reportUserProgress(0.08d);
 
         var uniqueEntries = new List<ScrapedFilmEntry>();
+        var scrapeWasComplete = false;
 
         for (var page = 1; page <= maxPages; page++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var pageStartProgress = 0.08d + (((page - 1) / (double)maxPages) * 0.32d);
-            var pageProgressWidth = 0.32d / maxPages;
-            reportUserProgress(pageStartProgress);
+            reportUserProgress(0.08d + (((page - 1) / (double)maxPages) * 0.32d));
 
-            var entries = await FetchFilmEntriesPageAsync(username, page, rssReviews, requestDelay, cancellationToken).ConfigureAwait(false);
-            _logger.Debug("Parsed " + entries.Length + " watched film entr" + (entries.Length == 1 ? "y" : "ies") + " from films page " + page + " for " + username + ".");
-            if (entries.Length == 0)
+            var escapedUsername = Uri.EscapeDataString(username);
+            var filmsPath = page == 1
+                ? $"{escapedUsername}/films/"
+                : $"{escapedUsername}/films/page/{page}/";
+            var referer = page <= 1
+                ? $"https://letterboxd.com/{escapedUsername}/"
+                : page == 2
+                    ? $"https://letterboxd.com/{escapedUsername}/films/"
+                    : $"https://letterboxd.com/{escapedUsername}/films/page/{page - 1}/";
+
+            var html = await GetStringWithLoggingAsync(filmsPath, requestDelay, cancellationToken, referer).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(html))
             {
-                if (page == 1)
-                {
-                    _logger.Warning("No Letterboxd watched films found for " + username + ". The page structure may have changed or the profile has no watched films.");
-                }
-
+                _logger.Warning("Films page " + page + " for " + username + " was not readable; previously cached films will be kept.");
                 break;
+            }
+
+            var entries = ParseFilmEntries(html, rssReviews).ToArray();
+            if (entries.Length == 0 && page == 1)
+            {
+                _logger.Warning("No Letterboxd watched films found for " + username + ". The page structure may have changed or the profile has no watched films.");
             }
 
             foreach (var entry in entries)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (!seenSlugs.Add(entry.LetterboxdSlug))
+                if (seenSlugs.Add(entry.LetterboxdSlug))
                 {
-                    _logger.Debug("Skipping duplicate Letterboxd slug " + entry.LetterboxdSlug + " for " + username + ".");
-                    continue;
+                    uniqueEntries.Add(entry);
                 }
-
-                uniqueEntries.Add(entry);
             }
 
-            reportUserProgress(pageStartProgress + pageProgressWidth);
+            if (!HasOlderFilmsPage(html))
+            {
+                scrapeWasComplete = true;
+                break;
+            }
+
+            if (page == maxPages)
+            {
+                _logger.Info("Stopped at the configured limit of " + maxPages + " film page(s) for " + username + "; more pages exist.");
+            }
         }
 
-        _logger.Debug("Resolving " + uniqueEntries.Count + " unique watched film entr" + (uniqueEntries.Count == 1 ? "y" : "ies") + " for " + username + ".");
-
-        var completedEntries = 0;
-        using var resolverSemaphore = new SemaphoreSlim(4, 4);
-        var resolvedRecordTasks = uniqueEntries.Select(async entry =>
+        for (var entryIndex = 0; entryIndex < uniqueEntries.Count; entryIndex++)
         {
-            await resolverSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                return await BuildCachedRecordsForEntryAsync(
-                    mapping,
-                    username,
-                    displayName,
-                    avatarUrl,
-                    entry,
-                    requestDelay,
-                    cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                var completed = Interlocked.Increment(ref completedEntries);
-                var progressValue = 0.42d + (0.48d * (completed / (double)Math.Max(1, uniqueEntries.Count)));
-                reportUserProgress(progressValue);
-                resolverSemaphore.Release();
-            }
-        });
+            cancellationToken.ThrowIfCancellationRequested();
 
-        var resolvedRecords = await Task.WhenAll(resolvedRecordTasks).ConfigureAwait(false);
-        records.AddRange(resolvedRecords.SelectMany(static item => item));
+            var record = await BuildCachedRecordForEntryAsync(
+                mapping,
+                username,
+                displayName,
+                avatarUrl,
+                uniqueEntries[entryIndex],
+                requestDelay,
+                cancellationToken).ConfigureAwait(false);
+            records.Add(record);
+            reportUserProgress(0.42d + (0.56d * ((entryIndex + 1) / (double)Math.Max(1, uniqueEntries.Count))));
+        }
 
-        reportUserProgress(0.92d);
-        _logger.Info("Scraped " + records.Count + " cache row(s) for " + username + ".");
-        return records;
+        var reviewCount = records.Count(static record => !string.IsNullOrWhiteSpace(record.ReviewText));
+        _logger.Info("Scraped " + records.Count + " film(s) for " + username + " (" + reviewCount + " with review text, scrape " + (scrapeWasComplete ? "complete" : "partial") + ").");
+        return new UserScrapeResult(records, scrapeWasComplete);
     }
 
-    private async Task<IReadOnlyList<CachedReviewRecord>> BuildCachedRecordsForEntryAsync(
+    private async Task<CachedReviewRecord> BuildCachedRecordForEntryAsync(
         LetterboxdUserMapping mapping,
         string username,
         string displayName,
@@ -375,8 +267,6 @@ public sealed class LetterboxdScraper
         TimeSpan requestDelay,
         CancellationToken cancellationToken)
     {
-        _logger.Debug("Processing watched film for " + username + ": slug=" + entry.LetterboxdSlug + ", rating=" + (entry.StarRating.Length == 0 ? "(none)" : entry.StarRating) + ", hasRssReview=" + !string.IsNullOrWhiteSpace(entry.ReviewText) + ", hasReviewPage=" + !string.IsNullOrWhiteSpace(entry.ReviewPath) + ".");
-
         if (!string.IsNullOrWhiteSpace(entry.ReviewPath))
         {
             var reviewPage = await FetchReviewPageAsync(entry.ReviewPath, requestDelay, cancellationToken).ConfigureAwait(false);
@@ -388,31 +278,26 @@ public sealed class LetterboxdScraper
                 }
 
                 entry.ContainsSpoilers = reviewPage.ContainsSpoilers;
-                _logger.Debug("Parsed review page for " + username + ": slug=" + entry.LetterboxdSlug + ", hasReviewText=" + !string.IsNullOrWhiteSpace(entry.ReviewText) + ", containsSpoilers=" + entry.ContainsSpoilers + ".");
             }
         }
 
         var externalIds = await ResolveExternalIdsAsync(entry.LetterboxdSlug, requestDelay, cancellationToken).ConfigureAwait(false);
-        _logger.Debug("Resolved external ids for " + entry.LetterboxdSlug + ": TMDB=" + (externalIds.TmdbId ?? "(none)") + ", IMDb=" + (externalIds.ImdbId ?? "(none)") + ".");
 
-        return BuildLookupIds(externalIds, entry.LetterboxdSlug)
-            .Select(lookupId => new CachedReviewRecord
-            {
-                LookupId = lookupId,
-                TmdbId = externalIds.TmdbId,
-                ImdbId = externalIds.ImdbId,
-                LetterboxdSlug = entry.LetterboxdSlug,
-                JellyfinUserId = mapping.JellyfinUserId?.Trim() ?? string.Empty,
-                LetterboxdUsername = username,
-                DisplayName = displayName,
-                AvatarUrl = avatarUrl,
-                StarRating = entry.StarRating,
-                RatingValue = entry.RatingValue,
-                ReviewText = entry.ReviewText,
-                ContainsSpoilers = entry.ContainsSpoilers,
-                WatchedDate = entry.WatchedDate
-            })
-            .ToArray();
+        return new CachedReviewRecord
+        {
+            TmdbId = externalIds.TmdbId,
+            ImdbId = externalIds.ImdbId,
+            LetterboxdSlug = entry.LetterboxdSlug,
+            JellyfinUserId = mapping.JellyfinUserId?.Trim() ?? string.Empty,
+            LetterboxdUsername = username,
+            DisplayName = displayName,
+            AvatarUrl = avatarUrl,
+            StarRating = entry.StarRating,
+            RatingValue = entry.RatingValue,
+            ReviewText = entry.ReviewText,
+            ContainsSpoilers = entry.ContainsSpoilers,
+            WatchedDate = entry.WatchedDate
+        };
     }
 
     private async Task<string> FetchProfileImageUrlAsync(
@@ -421,16 +306,13 @@ public sealed class LetterboxdScraper
         CancellationToken cancellationToken)
     {
         var profilePath = $"{Uri.EscapeDataString(username)}/";
-        _logger.Debug("Fetching Letterboxd profile for avatar: " + profilePath + ".");
         var html = await GetStringWithLoggingAsync(profilePath, requestDelay, cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(html))
         {
             return string.Empty;
         }
 
-        var avatarUrl = ExtractProfileImageUrl(html);
-        _logger.Debug("Parsed Letterboxd avatar for " + username + ": " + (string.IsNullOrWhiteSpace(avatarUrl) ? "(none)" : avatarUrl) + ".");
-        return avatarUrl ?? string.Empty;
+        return ExtractProfileImageUrl(html) ?? string.Empty;
     }
 
     private async Task<IReadOnlyDictionary<string, string>> FetchRssReviewsAsync(
@@ -476,8 +358,6 @@ public sealed class LetterboxdScraper
 
                 reviews[slug] = reviewText!;
             }
-
-            _logger.Info("Parsed " + reviews.Count + " RSS review(s) for " + username + ".");
         }
         catch (Exception ex)
         {
@@ -485,34 +365,6 @@ public sealed class LetterboxdScraper
         }
 
         return reviews;
-    }
-
-    private async Task<ScrapedFilmEntry[]> FetchFilmEntriesPageAsync(
-        string username,
-        int page,
-        IReadOnlyDictionary<string, string> rssReviews,
-        TimeSpan requestDelay,
-        CancellationToken cancellationToken)
-    {
-        var escapedUsername = Uri.EscapeDataString(username);
-        var filmsPath = page == 1
-            ? $"{escapedUsername}/films/"
-            : $"{escapedUsername}/films/page/{page}/";
-
-        var referer = page <= 1
-            ? $"https://letterboxd.com/{escapedUsername}/"
-            : page == 2
-                ? $"https://letterboxd.com/{escapedUsername}/films/"
-                : $"https://letterboxd.com/{escapedUsername}/films/page/{page - 1}/";
-
-        _logger.Debug("Fetching watched films page " + page + " for " + username + ": " + filmsPath + ".");
-        var html = await GetStringWithLoggingAsync(filmsPath, requestDelay, cancellationToken, referer).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(html))
-        {
-            return [];
-        }
-
-        return ParseFilmEntries(html, rssReviews).ToArray();
     }
 
     private IEnumerable<ScrapedFilmEntry> ParseFilmEntries(
@@ -552,7 +404,6 @@ public sealed class LetterboxdScraper
             return null;
         }
 
-        _logger.Debug("Fetching Letterboxd review page " + relativePath + ".");
         var html = await GetStringWithLoggingAsync(relativePath, requestDelay, cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(html))
         {
@@ -562,96 +413,6 @@ public sealed class LetterboxdScraper
         return new ReviewPageData(
             ExtractReviewTextFromReviewPage(html),
             IsSpoilerReviewPage(html));
-    }
-
-    private async Task<UserFilmLookupResult> FetchUserFilmPageDataAsync(
-        string username,
-        string slug,
-        TimeSpan requestDelay,
-        CancellationToken cancellationToken)
-    {
-        var relativePath = $"{Uri.EscapeDataString(username)}/film/{Uri.EscapeDataString(slug)}/";
-        _logger.Debug("Fetching direct Letterboxd user film page " + relativePath + ".");
-        var html = await GetStringWithLoggingAsync(relativePath, requestDelay, cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(html))
-        {
-            _logger.Debug("Direct Letterboxd user film page was not readable for " + username + " and " + slug + ".");
-            return UserFilmLookupResult.Inconclusive();
-        }
-
-        return UserFilmLookupResult.Found(new UserFilmPageData(
-            ExtractReviewTextFromReviewPage(html),
-            IsSpoilerReviewPage(html),
-            ExtractJsonLdRatingValue(html)));
-    }
-
-    private async Task<UserFilmLookupResult> FetchUserFilmGridEntryAsync(
-        string username,
-        string slug,
-        TimeSpan requestDelay,
-        CancellationToken cancellationToken,
-        int maxPages = 5)
-    {
-        var escapedUsername = Uri.EscapeDataString(username);
-
-        for (var page = 1; page <= maxPages; page++)
-        {
-            var filmsPath = page == 1
-                ? $"{escapedUsername}/films/"
-                : $"{escapedUsername}/films/page/{page}/";
-            var referer = page <= 1
-                ? $"https://letterboxd.com/{escapedUsername}/"
-                : page == 2
-                    ? $"https://letterboxd.com/{escapedUsername}/films/"
-                    : $"https://letterboxd.com/{escapedUsername}/films/page/{page - 1}/";
-
-            _logger.Debug("Searching Letterboxd films grid page " + page + " for " + username + " and slug " + slug + ".");
-            var html = await GetStringWithLoggingAsync(filmsPath, requestDelay, cancellationToken, referer).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(html))
-            {
-                _logger.Debug("Letterboxd films grid page " + page + " was not readable for " + username + " — treating as inconclusive.");
-                return UserFilmLookupResult.Inconclusive();
-            }
-
-            var entry = ParseFilmEntries(html, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
-                .FirstOrDefault(item => string.Equals(item.LetterboxdSlug, slug, StringComparison.OrdinalIgnoreCase));
-            if (entry is not null)
-            {
-                if (!string.IsNullOrWhiteSpace(entry.ReviewPath))
-                {
-                    var reviewPage = await FetchReviewPageAsync(entry.ReviewPath, requestDelay, cancellationToken).ConfigureAwait(false);
-                    if (reviewPage is not null)
-                    {
-                        if (IsUsefulReviewText(reviewPage.ReviewText))
-                        {
-                            entry.ReviewText = reviewPage.ReviewText;
-                        }
-
-                        entry.ContainsSpoilers = reviewPage.ContainsSpoilers;
-                    }
-                }
-
-                _logger.Debug("Found " + slug + " on films grid page " + page + " for " + username + ".");
-                return UserFilmLookupResult.Found(new UserFilmPageData(
-                    entry.ReviewText,
-                    entry.ContainsSpoilers,
-                    entry.RatingValue));
-            }
-
-            if (!HasOlderFilmsPage(html))
-            {
-                _logger.Debug("Did not find " + slug + " on a fully readable films grid for " + username + " (checked " + page + " page(s)).");
-                return UserFilmLookupResult.NotFound();
-            }
-
-            if (page == maxPages)
-            {
-                _logger.Debug("Did not find " + slug + " within " + maxPages + " films grid page(s) for " + username + " — more pages exist but limit reached.");
-                return UserFilmLookupResult.Inconclusive();
-            }
-        }
-
-        return UserFilmLookupResult.Inconclusive();
     }
 
     private async Task<string?> GetStringWithLoggingAsync(
@@ -679,7 +440,6 @@ public sealed class LetterboxdScraper
                     request.Headers.Referrer = refererUri;
                 }
 
-                _logger.Debug("Letterboxd HTTP GET " + relativePath + ".");
                 using var response = await _httpClientFactory.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                     .ConfigureAwait(false);
 
@@ -697,7 +457,6 @@ public sealed class LetterboxdScraper
                     return null;
                 }
 
-                _logger.Debug("Letterboxd request for " + relativePath + " returned HTTP " + (int)response.StatusCode + ".");
                 return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -729,8 +488,8 @@ public sealed class LetterboxdScraper
             return (titleRating.ToString("0.0", CultureInfo.InvariantCulture), titleRating);
         }
 
-        const char fullStar = '\u2605';
-        const char halfStar = '\u00BD';
+        const char fullStar = '★';
+        const char halfStar = '½';
 
         var decoded = WebUtility.HtmlDecode(StripTags(row));
         if (decoded.Contains(fullStar, StringComparison.Ordinal))
@@ -752,11 +511,9 @@ public sealed class LetterboxdScraper
         var cached = await _cacheStore.GetFilmExternalIdsAsync(slug, cancellationToken).ConfigureAwait(false);
         if (cached is not null && (!string.IsNullOrWhiteSpace(cached.TmdbId) || !string.IsNullOrWhiteSpace(cached.ImdbId)))
         {
-            _logger.Debug("Using cached external ids for Letterboxd slug " + slug + ".");
             return cached;
         }
 
-        _logger.Debug("Resolving external ids from Letterboxd film page for slug " + slug + ".");
         var html = await GetStringWithLoggingAsync($"film/{Uri.EscapeDataString(slug)}/", requestDelay, cancellationToken).ConfigureAwait(false);
         var externalIds = new FilmExternalIds();
 
@@ -777,28 +534,6 @@ public sealed class LetterboxdScraper
 
         await _cacheStore.SaveFilmExternalIdsAsync(slug, externalIds, cancellationToken).ConfigureAwait(false);
         return externalIds;
-    }
-
-    private async Task<string?> ResolveLetterboxdSlugForMovieAsync(
-        string movieTitle,
-        int? productionYear,
-        IReadOnlyCollection<string> lookupIds,
-        TimeSpan requestDelay,
-        CancellationToken cancellationToken)
-    {
-        foreach (var candidate in BuildSlugCandidates(movieTitle, productionYear))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var externalIds = await ResolveExternalIdsAsync(candidate, requestDelay, cancellationToken).ConfigureAwait(false);
-            if (ExternalIdsMatch(externalIds, lookupIds))
-            {
-                _logger.Debug("Resolved " + movieTitle + " to Letterboxd slug " + candidate + " via external id match.");
-                return candidate;
-            }
-        }
-
-        return null;
     }
 
     private async Task WaitForLetterboxdRequestSlotAsync(
@@ -843,94 +578,6 @@ public sealed class LetterboxdScraper
             5000d,
             30000d);
         return TimeSpan.FromMilliseconds(milliseconds);
-    }
-
-    private static IEnumerable<string> BuildLookupIds(FilmExternalIds externalIds, string slug)
-    {
-        if (!string.IsNullOrWhiteSpace(externalIds.TmdbId))
-        {
-            yield return "tmdb:" + externalIds.TmdbId.Trim();
-            yield return externalIds.TmdbId.Trim();
-        }
-
-        if (!string.IsNullOrWhiteSpace(externalIds.ImdbId))
-        {
-            yield return "imdb:" + externalIds.ImdbId.Trim();
-            yield return externalIds.ImdbId.Trim();
-        }
-
-        yield return "letterboxd:" + slug.Trim();
-    }
-
-    private static IEnumerable<string> BuildSlugCandidates(string movieTitle, int? productionYear)
-    {
-        var baseSlug = SlugifyTitle(movieTitle);
-        if (string.IsNullOrWhiteSpace(baseSlug))
-        {
-            yield break;
-        }
-
-        yield return baseSlug;
-
-        if (productionYear.HasValue)
-        {
-            yield return baseSlug + "-" + productionYear.Value.ToString(CultureInfo.InvariantCulture);
-        }
-    }
-
-    private static string SlugifyTitle(string title)
-    {
-        var normalized = WebUtility.HtmlDecode(title)
-            .Normalize(NormalizationForm.FormD)
-            .ToLowerInvariant()
-            .Replace("&", " and ", StringComparison.Ordinal);
-        var builder = new StringBuilder(normalized.Length);
-        var previousWasSeparator = false;
-
-        foreach (var character in normalized)
-        {
-            var category = CharUnicodeInfo.GetUnicodeCategory(character);
-            if (category == UnicodeCategory.NonSpacingMark)
-            {
-                continue;
-            }
-
-            if (char.IsLetterOrDigit(character))
-            {
-                builder.Append(character);
-                previousWasSeparator = false;
-            }
-            else if (!previousWasSeparator)
-            {
-                builder.Append('-');
-                previousWasSeparator = true;
-            }
-        }
-
-        return builder.ToString().Trim('-').Normalize(NormalizationForm.FormC);
-    }
-
-    private static bool ExternalIdsMatch(FilmExternalIds externalIds, IEnumerable<string> lookupIds)
-    {
-        var ids = lookupIds
-            .Where(static id => !string.IsNullOrWhiteSpace(id))
-            .SelectMany(static id =>
-            {
-                var normalized = id.Trim().ToLowerInvariant();
-                var separatorIndex = normalized.IndexOf(':', StringComparison.Ordinal);
-                return separatorIndex >= 0
-                    ? [normalized, normalized[(separatorIndex + 1)..]]
-                    : new[] { normalized };
-            })
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        return (!string.IsNullOrWhiteSpace(externalIds.TmdbId) && ids.Contains(externalIds.TmdbId.Trim()))
-            || (!string.IsNullOrWhiteSpace(externalIds.ImdbId) && ids.Contains(externalIds.ImdbId.Trim()));
-    }
-
-    private static string FormatRatingText(double ratingValue)
-    {
-        return ratingValue.ToString("0.0", CultureInfo.InvariantCulture);
     }
 
     private static string? ExtractFilmSlug(string htmlOrUrl)
@@ -1067,75 +714,6 @@ public sealed class LetterboxdScraper
         return null;
     }
 
-    private static double? ExtractJsonLdRatingValue(string html)
-    {
-        foreach (Match scriptMatch in JsonLdScriptRegex.Matches(html))
-        {
-            var json = Regex.Replace(
-                scriptMatch.Groups["json"].Value,
-                @"/\*.*?\*/",
-                string.Empty,
-                RegexOptions.Singleline).Trim();
-
-            if (string.IsNullOrWhiteSpace(json))
-            {
-                continue;
-            }
-
-            try
-            {
-                using var document = JsonDocument.Parse(WebUtility.HtmlDecode(json));
-                var rating = ExtractRatingValueFromJsonElement(document.RootElement);
-                if (rating.HasValue)
-                {
-                    return rating.Value;
-                }
-            }
-            catch (JsonException)
-            {
-                continue;
-            }
-        }
-
-        return null;
-    }
-
-    private static double? ExtractRatingValueFromJsonElement(JsonElement element)
-    {
-        if (element.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in element.EnumerateArray())
-            {
-                var value = ExtractRatingValueFromJsonElement(item);
-                if (value.HasValue)
-                {
-                    return value.Value;
-                }
-            }
-
-            return null;
-        }
-
-        if (element.ValueKind != JsonValueKind.Object || !IsReviewJsonElement(element))
-        {
-            return null;
-        }
-
-        if (!element.TryGetProperty("reviewRating", out var rating)
-            || rating.ValueKind != JsonValueKind.Object
-            || !rating.TryGetProperty("ratingValue", out var ratingValue))
-        {
-            return null;
-        }
-
-        return ratingValue.ValueKind switch
-        {
-            JsonValueKind.Number when ratingValue.TryGetDouble(out var number) => number,
-            JsonValueKind.String when double.TryParse(ratingValue.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var number) => number,
-            _ => null
-        };
-    }
-
     private static string? ExtractReviewTextFromJsonElement(JsonElement element)
     {
         if (element.ValueKind == JsonValueKind.Array)
@@ -1245,7 +823,7 @@ public sealed class LetterboxdScraper
             char.IsWhiteSpace(character)
             || char.IsDigit(character)
             || character is '.' or '/' or '\\' or '-' or ':'
-            || character is '\u2605' or '\u00BD');
+            || character is '★' or '½');
     }
 
     private static string CleanText(string html)
@@ -1294,30 +872,5 @@ public sealed class LetterboxdScraper
 
     private sealed record ReviewPageData(string? ReviewText, bool ContainsSpoilers);
 
-    private sealed record UserFilmPageData(string? ReviewText, bool ContainsSpoilers, double? RatingValue);
-
-    private enum UserFilmLookupStatus
-    {
-        Found,
-        NotFound,
-        Inconclusive
-    }
-
-    private sealed record UserFilmLookupResult(UserFilmLookupStatus Status, UserFilmPageData? PageData)
-    {
-        public static UserFilmLookupResult Found(UserFilmPageData pageData)
-        {
-            return new UserFilmLookupResult(UserFilmLookupStatus.Found, pageData);
-        }
-
-        public static UserFilmLookupResult NotFound()
-        {
-            return new UserFilmLookupResult(UserFilmLookupStatus.NotFound, null);
-        }
-
-        public static UserFilmLookupResult Inconclusive()
-        {
-            return new UserFilmLookupResult(UserFilmLookupStatus.Inconclusive, null);
-        }
-    }
+    private sealed record UserScrapeResult(IReadOnlyList<CachedReviewRecord> Records, bool ScrapeWasComplete);
 }
