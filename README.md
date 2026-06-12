@@ -2,6 +2,8 @@
 
 > **Proof of concept — rough and unreliable. Not production ready.**
 >
+> This plugin is also **entirely vibe coded**. I liked the idea, so I had AI write it — no code in this repo was written by hand, and if you ask me what half of it does, I'll be reading it for the first time alongside you. It runs, which is frankly all I asked of it.
+>
 > This plugin is an experiment and should not be used on live Jellyfin servers. It works by scraping public Letterboxd pages — there is no official API. Scraping is slow by design (requests are deliberately throttled to avoid getting blocked), non-optimised, and will silently break if Letterboxd changes its HTML structure or tightens its bot detection. Data may be incomplete, stale, or missing entirely depending on how a user's film history is structured. Use at your own risk.
 
 A Jellyfin server plugin that brings your Letterboxd social feed into your media library. When you open a movie in Jellyfin, the plugin shows a **Letterboxd Friends** widget on the detail page — displaying ratings, watched status, and reviews from the Letterboxd accounts you configure.
