@@ -8,6 +8,14 @@
         "category":  "Metadata",
         "versions":  [
                          {
+                             "version":  "1.0.0.45",
+                             "changelog":  "Fix error spam when the browser had the Jellyfin web index cached: the injection middleware no longer writes to bodyless 304 responses and always serves the index fresh so the widget script is reliably injected.",
+                             "targetAbi":  "10.11.0.0",
+                             "sourceUrl":  "https://github.com/dcm2610/jellyfin-letterboxd-social/releases/download/v1.0.0.45/LetterboxdSocial_1.0.0.45.zip",
+                             "checksum":  "8822F9131967EC288CED3DE962038FA5",
+                             "timestamp":  "2026-06-12T00:00:00Z"
+                         },
+                         {
                              "version":  "1.0.0.44",
                              "changelog":  "Major refactor: SQLite replaced with a dependency-free JSON cache, on-demand scraping removed (scheduled scraping only), fixed a bug where a blocked scrape could wipe cached data, lighter web injection and frontend, condensed logging. Cache rebuilds on the first scheduled scrape after updating.",
                              "targetAbi":  "10.11.0.0",
