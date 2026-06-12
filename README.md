@@ -1,10 +1,10 @@
-# Jellyfin.Plugin.LetterboxdSocial
+﻿# Jellyfin.Plugin.LetterboxdSocial
 
-> **Proof of concept — rough, slow, and unreliable. Not production ready.**
+> **Proof of concept â€” rough, slow, and unreliable. Not production ready.**
 >
-> This plugin is an experiment and should not be used on live Jellyfin servers. It works by scraping public Letterboxd pages — there is no official API. Scraping is slow by design (requests are deliberately throttled to avoid getting blocked), non-optimised, and will silently break if Letterboxd changes its HTML structure or tightens its bot detection. Data may be incomplete, stale, or missing entirely depending on how a user's film history is structured. Use at your own risk.
+> This plugin is an experiment and should not be used on live Jellyfin servers. It works by scraping public Letterboxd pages â€” there is no official API. Scraping is slow by design (requests are deliberately throttled to avoid getting blocked), non-optimised, and will silently break if Letterboxd changes its HTML structure or tightens its bot detection. Data may be incomplete, stale, or missing entirely depending on how a user's film history is structured. Use at your own risk.
 
-A Jellyfin server plugin that brings your Letterboxd social feed into your media library. When you open a movie in Jellyfin, the plugin shows a **Letterboxd Friends** widget on the detail page — displaying ratings, watched status, and reviews from the Letterboxd accounts you configure.
+A Jellyfin server plugin that brings your Letterboxd social feed into your media library. When you open a movie in Jellyfin, the plugin shows a **Letterboxd Friends** widget on the detail page â€” displaying ratings, watched status, and reviews from the Letterboxd accounts you configure.
 
 ![Letterboxd Friends widget on a Jellyfin movie detail page](screenshots/widget.png)
 
@@ -31,7 +31,7 @@ The plugin has no access to Letterboxd's API (there isn't a public one). Instead
 
 Scraped data is stored in a local SQLite database under the Jellyfin plugin data folder. The Jellyfin Web frontend receives a small JavaScript widget that is injected into movie detail pages and reads from this cache via a plugin API endpoint.
 
-Letterboxd imposes anti-scraping measures on paginated film pages. The plugin uses browser-like headers and a realistic referrer chain to access deeper pages, but this is inherently fragile — Letterboxd can and does block or change these patterns.
+Letterboxd imposes anti-scraping measures on paginated film pages. The plugin uses browser-like headers and a realistic referrer chain to access deeper pages, but this is inherently fragile â€” Letterboxd can and does block or change these patterns.
 
 ## Requirements
 
@@ -41,12 +41,12 @@ Letterboxd imposes anti-scraping measures on paginated film pages. The plugin us
 
 ## Installing via Plugin Repository
 
-1. In Jellyfin, go to **Dashboard → Plugins → Repositories**.
+1. In Jellyfin, go to **Dashboard â†’ Plugins â†’ Repositories**.
 2. Add the following URL as a new repository:
    ```
    https://raw.githubusercontent.com/dcm2610/jellyfin-letterboxd-social/main/manifest.json
    ```
-3. Go to **Dashboard → Plugins → Catalogue**, find **Letterboxd Social**, and install it.
+3. Go to **Dashboard â†’ Plugins â†’ Catalogue**, find **Letterboxd Social**, and install it.
 4. Restart Jellyfin when prompted.
 
 ## Installing Manually
@@ -57,29 +57,29 @@ Letterboxd imposes anti-scraping measures on paginated film pages. The plugin us
 
 ## Configuration
 
-1. Go to **Dashboard → Plugins → Letterboxd Social**.
+1. Go to **Dashboard â†’ Plugins â†’ Letterboxd Social**.
 2. Add one entry per Letterboxd account you want to track:
-   - **Letterboxd Username** — the username as it appears in their profile URL (e.g. `letterboxd.com/username`)
-   - **Display Name** — the name shown on the widget card
+   - **Letterboxd Username** â€” the username as it appears in their profile URL (e.g. `letterboxd.com/username`)
+   - **Display Name** â€” the name shown on the widget card
 3. Optionally adjust:
-   - **Max Film Pages Per User** — how many pages of a user's film grid to check during on-demand searches (default: 3). Higher values find older films but are slower.
-   - **Request Delay (ms)** — pause between Letterboxd requests to reduce the chance of rate limiting (default: 1000ms).
-4. Save, then go to **Dashboard → Scheduled Tasks** and run **Refresh Letterboxd Social Reviews** manually to populate the cache immediately.
+   - **Max Film Pages Per User** â€” how many pages of a user's film grid to check during on-demand searches (default: 3). Higher values find older films but are slower.
+   - **Request Delay (ms)** â€” pause between Letterboxd requests to reduce the chance of rate limiting (default: 1000ms).
+4. Save, then go to **Dashboard â†’ Scheduled Tasks** and run **Refresh Letterboxd Social Reviews** manually to populate the cache immediately.
 
 ## Scheduled Tasks
 
 | Task | Default interval | Purpose |
 |------|-----------------|---------|
 | Refresh Letterboxd Social Reviews | Every hour | Full scrape of all configured users |
-| Reset Letterboxd Direct Check Cache | Manual only | Clears on-demand miss markers — useful if you suspect stale results |
+| Reset Letterboxd Direct Check Cache | Manual only | Clears on-demand miss markers â€” useful if you suspect stale results |
 
 ## Known Limitations
 
-- **Scraping only** — no official API. Any Letterboxd site change can break scraping silently.
-- **Public profiles only** — private Letterboxd accounts cannot be read.
-- **Ratings-only entries on older pages** — if a friend watched a film a long time ago and never wrote a review, it may sit beyond the reachable page range.
-- **On-demand widget update** — the widget reliably shows cached data. Triggering a live on-demand search and updating the widget in the same page load without a refresh is not fully reliable (work in progress).
-- **No official Jellyfin endorsement** — this is a personal project, not affiliated with Jellyfin or Letterboxd.
+- **Scraping only** â€” no official API. Any Letterboxd site change can break scraping silently.
+- **Public profiles only** â€” private Letterboxd accounts cannot be read.
+- **Ratings-only entries on older pages** â€” if a friend watched a film a long time ago and never wrote a review, it may sit beyond the reachable page range.
+- **On-demand widget update** â€” the widget reliably shows cached data. Triggering a live on-demand search and updating the widget in the same page load without a refresh is not fully reliable (work in progress).
+- **No official Jellyfin endorsement** â€” this is a personal project, not affiliated with Jellyfin or Letterboxd.
 
 ## Building From Source
 
