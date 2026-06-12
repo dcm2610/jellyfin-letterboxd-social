@@ -60,7 +60,7 @@ Write-Done "Done."
 # --- 2. meta.json ---
 Write-Step "Updating meta.json"
 $MetaPath = Join-Path $RepoRoot 'meta.json'
-$meta = Get-Content $MetaPath -Raw | ConvertFrom-Json
+$meta = Get-Content $MetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $meta.version   = $Version
 $meta.changelog = $Changelog
 $meta.timestamp = $TimestampMeta
@@ -70,7 +70,7 @@ Write-Done "Done."
 # --- 3. build.yaml ---
 Write-Step "Updating build.yaml"
 $BuildPath = Join-Path $RepoRoot 'build.yaml'
-$build = Get-Content $BuildPath -Raw
+$build = Get-Content $BuildPath -Raw -Encoding UTF8
 $build = $build -replace '(?m)^version:\s*"[^"]+"', "version: `"$Version`""
 # changelog is the last key; replace from "changelog:" to end of file
 $build = $build -replace '(?s)^(changelog:.*)$', "changelog: >`n  $Changelog`n"
@@ -99,7 +99,7 @@ Write-Done "MD5: $Md5"
 # --- 7. manifest.json ---
 Write-Step "Updating manifest.json"
 $ManifestPath = Join-Path $RepoRoot 'manifest.json'
-$manifestParsed = Get-Content $ManifestPath -Raw | ConvertFrom-Json
+$manifestParsed = Get-Content $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 # PS 5.1 returns the element directly for a single-element JSON array, not a PS array.
 $plugin = if ($manifestParsed -is [System.Array]) { $manifestParsed[0] } else { $manifestParsed }
 $newEntry = [PSCustomObject]@{
@@ -118,7 +118,8 @@ Write-Done "Done."
 # --- 8. README.md ---
 Write-Step "Updating README.md"
 $ReadmePath = Join-Path $RepoRoot 'README.md'
-$readme = Get-Content $ReadmePath -Raw
+# -Encoding UTF8 is required: PS 5.1 defaults to ANSI and would mangle em-dashes/arrows on rewrite.
+$readme = Get-Content $ReadmePath -Raw -Encoding UTF8
 $readme = $readme -replace 'releases/download/v[\d.]+/LetterboxdSocial_[\d.]+\.zip', "releases/download/v$Version/LetterboxdSocial_$Version.zip"
 [System.IO.File]::WriteAllText($ReadmePath, $readme, [System.Text.Encoding]::UTF8)
 Write-Done "Done."
