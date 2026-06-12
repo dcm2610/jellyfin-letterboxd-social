@@ -39,8 +39,12 @@ public sealed class FrontendInjectionMiddleware
         }
 
         // Ask downstream for an uncompressed response so the HTML can be edited
-        // without any gzip/brotli decode/re-encode round trip.
+        // without any gzip/brotli decode/re-encode round trip, and disable
+        // conditional requests so the index is always a 200 with a body to inject
+        // into (a 304 would point clients at cached HTML we never saw).
         context.Request.Headers.Remove("Accept-Encoding");
+        context.Request.Headers.Remove("If-None-Match");
+        context.Request.Headers.Remove("If-Modified-Since");
 
         var originalBody = context.Response.Body;
         await using var buffer = new MemoryStream();
@@ -53,7 +57,12 @@ public sealed class FrontendInjectionMiddleware
             var originalBytes = buffer.ToArray();
             if (!ShouldInject(context.Response))
             {
-                await WriteBytesAsync(originalBody, originalBytes, context.RequestAborted).ConfigureAwait(false);
+                // Bodyless responses (304/204/HEAD-like) must not be written to at all.
+                if (originalBytes.Length > 0)
+                {
+                    await WriteBytesAsync(originalBody, originalBytes, context.RequestAborted).ConfigureAwait(false);
+                }
+
                 return;
             }
 
@@ -85,8 +94,11 @@ public sealed class FrontendInjectionMiddleware
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to inject Letterboxd Social frontend script.");
-            buffer.Position = 0;
-            await buffer.CopyToAsync(originalBody, context.RequestAborted).ConfigureAwait(false);
+            if (buffer.Length > 0)
+            {
+                buffer.Position = 0;
+                await buffer.CopyToAsync(originalBody, context.RequestAborted).ConfigureAwait(false);
+            }
         }
         finally
         {
